@@ -1,0 +1,47 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "watch files",
+			"command": "cargo",
+			"args": [
+				"run",
+				"--",
+				"--language=en-US",
+			],
+			"isBackground": true,
+			"problemMatcher": {
+				"owner": "typst",
+				"fileLocation": "absolute",
+				"background": {
+					"activeOnStart": false,
+					"beginsPattern": "^START$",
+					"endsPattern": "^END$"
+				},
+				"pattern": {
+					"regexp": "^(.*) (\\d+):(\\d+)-(\\d+):(\\d+) (warning|error|info) (.*)$",
+					"file": 1,
+					"line": 2,
+					"column": 3,
+					"endLine": 4,
+					"endColumn": 5,
+					"severity": 6,
+					"message": 7
+				}
+			}
+		},
+		{
+			"label": "run server",
+			"command": "java",
+			"args": [
+				"-cp",
+				"../LanguageTool-6.2/languagetool-server.jar",
+				"org.languagetool.server.HTTPServer",
+				"--port",
+				"8081",
+				"--allow-origin"
+			],
+			"problemMatcher": []
+		}
+	]
+}
