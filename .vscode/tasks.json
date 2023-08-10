@@ -7,7 +7,8 @@
 			"args": [
 				"run",
 				"--",
-				"--language=en-US",
+				"--language=de-DE",
+				// "--plain",
 			],
 			"isBackground": true,
 			"problemMatcher": {

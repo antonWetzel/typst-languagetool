@@ -1,17 +1,13 @@
 mod convert;
 mod output;
 
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{fs, path::PathBuf, time::Duration};
 
 use clap::Parser;
 use languagetool_rust::{
-    check::{CheckRequest, Data},
-    error::Error,
-    server::ServerClient,
+	check::{CheckRequest, Data},
+	error::Error,
+	server::ServerClient,
 };
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
@@ -19,71 +15,83 @@ use output::Position;
 
 #[derive(Parser, Debug)]
 struct Args {
-    /// Document Language. Defaults to auto-detect, but explicit codes ("de-DE", "en-US", ...) enable more checks
-    #[clap(short, long, default_value = None)]
-    language: Option<String>,
+	/// Document Language. Defaults to auto-detect, but explicit codes ("de-DE", "en-US", ...) enable more checks
+	#[clap(short, long, default_value = None)]
+	language: Option<String>,
 
-    /// Delay in seconds
-    #[clap(short, long, default_value_t = 0.1)]
-    delay: f64,
+	/// Delay in seconds
+	#[clap(short, long, default_value_t = 0.1)]
+	delay: f64,
+
+	///
+	#[clap(short, long, default_value_t = false)]
+	plain: bool,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let args = Args::parse();
+	let args = Args::parse();
 
-    let (tx, rx) = std::sync::mpsc::channel();
-    let client = ServerClient::new("http://127.0.0.1", "8081");
-    if let Some(value) = &args.language {
-        client
-            .check(
-                &CheckRequest::default()
-                    .with_language(value.clone())
-                    .with_text(String::from("")),
-            )
-            .await?;
-    }
+	let (tx, rx) = std::sync::mpsc::channel();
+	let client = ServerClient::new("http://127.0.0.1", "8081");
+	if let Some(value) = &args.language {
+		client
+			.check(
+				&CheckRequest::default()
+					.with_language(value.clone())
+					.with_text(String::from("")),
+			)
+			.await?;
+	}
 
-    let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), None, tx)?;
+	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), None, tx)?;
 
-    watcher
-        .watcher()
-        .watch(Path::new("."), RecursiveMode::Recursive)?;
+	watcher
+		.watcher()
+		.watch(&std::env::current_dir().unwrap(), RecursiveMode::Recursive)?;
 
-    for events in rx {
-        for event in events.unwrap() {
-            match event.path.extension() {
-                Some(ext) if ext == "typ" => {}
-                _ => continue,
-            }
-            handle_file(&client, &args, event.path)
-                .await
-                .unwrap_or_else(|err| println!("{}", err));
-        }
-    }
+	for events in rx {
+		for event in events.unwrap() {
+			match event.path.extension() {
+				Some(ext) if ext == "typ" => {},
+				_ => continue,
+			}
+			handle_file(&client, &args, event.path)
+				.await
+				.unwrap_or_else(|err| println!("{}", err));
+		}
+	}
 
-    Ok(())
+	Ok(())
 }
 
 async fn handle_file(client: &ServerClient, args: &Args, file: PathBuf) -> Result<(), Error> {
-    let text = fs::read_to_string(&file)?;
+	let text = fs::read_to_string(&file)?;
 
-    let root = typst_syntax::parse(&text);
-    let data = convert::convert(&root);
+	let root = typst_syntax::parse(&text);
+	let data = convert::convert(&root);
 
-    println!("START");
-    let mut position = Position::new(&text);
-    for items in data {
-        let req = CheckRequest::default()
-            .with_language(match &args.language {
-                Some(value) => value.clone(),
-                None => "auto".into(),
-            })
-            .with_data(Data::from_iter(items.0));
+	if args.plain {
+		println!("START");
+	}
+	let mut position = Position::new(&text);
+	for items in data {
+		let req = CheckRequest::default()
+			.with_language(match &args.language {
+				Some(value) => value.clone(),
+				None => "auto".into(),
+			})
+			.with_data(Data::from_iter(items.0));
 
-        let response = &client.check(&req).await?;
-        output::output(&file, &mut position, response, items.1);
-    }
-    println!("END");
-    Ok(())
+		let response = &client.check(&req).await?;
+		if args.plain {
+			output::output_plain(&file, &mut position, response, items.1);
+		} else {
+			output::output_pretty(&file, &mut position, response, items.1);
+		}
+	}
+	if args.plain {
+		println!("End");
+	}
+	Ok(())
 }

@@ -8,6 +8,7 @@ Spellcheck typst files with a local LanguageTool-Server.
 	- please open an issue if some code/math creates error
 - print results with line and columns
 - vs-codium/vs-code problem-matcher to show hints in the file
+- pretty feedback
 
 ## Usage
 
@@ -25,11 +26,8 @@ Spellcheck typst files with a local LanguageTool-Server.
 
 ## To-do
 
+- no file watcher mode
 - allow remote server
-- pretty feedback
-- use all data
-	- suggestions
-	- ...
 - vs-codium/vs-code extension
 - choose used rules
 - additional allowed words
