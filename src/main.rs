@@ -1,9 +1,7 @@
 mod convert;
 mod output;
 
-use std::{fs, path::PathBuf, time::Duration};
-
-use clap::Parser;
+use clap::{Parser, ValueEnum};
 use languagetool_rust::{
 	check::{CheckRequest, Data},
 	error::Error,
@@ -12,9 +10,21 @@ use languagetool_rust::{
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 use output::Position;
+use std::{fs, path::PathBuf, time::Duration};
+
+#[derive(ValueEnum, Clone, Debug)]
+enum Task {
+	Check,
+	Watch,
+}
 
 #[derive(Parser, Debug)]
 struct Args {
+	task: Task,
+
+	/// File to check, may be a folder with `watch`
+	path: PathBuf,
+
 	/// Document Language. Defaults to auto-detect, but explicit codes ("de-DE", "en-US", ...) enable more checks
 	#[clap(short, long, default_value = None)]
 	language: Option<String>,
@@ -23,7 +33,7 @@ struct Args {
 	#[clap(short, long, default_value_t = 0.1)]
 	delay: f64,
 
-	///
+	/// Print results without annotations for easy regex evaluation
 	#[clap(short, long, default_value_t = false)]
 	plain: bool,
 }
@@ -31,24 +41,26 @@ struct Args {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Args::parse();
+	match args.task {
+		Task::Check => check(args).await?,
+		Task::Watch => watch(args).await?,
+	}
+	Ok(())
+}
 
+async fn check(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+	let client = ServerClient::new("http://127.0.0.1", "8081");
+	handle_file(&client, &args, &args.path).await?;
+	Ok(())
+}
+
+async fn watch(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 	let (tx, rx) = std::sync::mpsc::channel();
 	let client = ServerClient::new("http://127.0.0.1", "8081");
-	if let Some(value) = &args.language {
-		client
-			.check(
-				&CheckRequest::default()
-					.with_language(value.clone())
-					.with_text(String::from("")),
-			)
-			.await?;
-	}
-
 	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), None, tx)?;
-
 	watcher
 		.watcher()
-		.watch(&std::env::current_dir().unwrap(), RecursiveMode::Recursive)?;
+		.watch(&args.path, RecursiveMode::Recursive)?;
 
 	for events in rx {
 		for event in events.unwrap() {
@@ -56,7 +68,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				Some(ext) if ext == "typ" => {},
 				_ => continue,
 			}
-			handle_file(&client, &args, event.path)
+			handle_file(&client, &args, &event.path)
 				.await
 				.unwrap_or_else(|err| println!("{}", err));
 		}
@@ -65,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	Ok(())
 }
 
-async fn handle_file(client: &ServerClient, args: &Args, file: PathBuf) -> Result<(), Error> {
+async fn handle_file(client: &ServerClient, args: &Args, file: &PathBuf) -> Result<(), Error> {
 	let text = fs::read_to_string(&file)?;
 
 	let root = typst_syntax::parse(&text);
