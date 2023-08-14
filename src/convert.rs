@@ -62,6 +62,7 @@ impl State {
 			SyntaxKind::Space if self.mode == Mode::Markdown => {
 				DataAnnotation::new_text(node.text().into())
 			},
+			SyntaxKind::TermItem => DataAnnotation::new_markup(node.text().into()),
 			SyntaxKind::Parbreak => {
 				DataAnnotation::new_interpreted_markup(node.text().into(), String::from("\n\n"))
 			},
