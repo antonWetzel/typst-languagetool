@@ -9,7 +9,7 @@ pub struct Rules {
 #[derive(Serialize, Deserialize)]
 pub struct Function {
 	pub before: String,
-	// after: String, // requires recursive convert
+	pub after: String,
 }
 
 impl Rules {
