@@ -143,7 +143,12 @@ impl State {
 					output.add_encoded(String::new(), f.after.to_owned());
 				}
 			},
-			SyntaxKind::Code => {
+			SyntaxKind::Code
+			| SyntaxKind::ModuleImport
+			| SyntaxKind::ModuleInclude
+			| SyntaxKind::LetBinding
+			| SyntaxKind::ShowRule
+			| SyntaxKind::SetRule => {
 				self.mode = Mode::Code;
 				for child in node.children() {
 					self.convert(child, output, rules);
