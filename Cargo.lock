@@ -1249,6 +1249,7 @@ dependencies = [
  "languagetool-rust",
  "notify",
  "notify-debouncer-mini",
+ "serde",
  "serde_json",
  "substring",
  "tokio",

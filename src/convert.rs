@@ -1,12 +1,14 @@
 use languagetool_rust::check::DataAnnotation;
 use typst_syntax::{SyntaxKind, SyntaxNode};
 
-pub fn convert(node: &SyntaxNode) -> Vec<(Vec<DataAnnotation>, usize)> {
+use crate::rules::Rules;
+
+pub fn convert(node: &SyntaxNode, rules: &Rules) -> Vec<(Vec<DataAnnotation>, usize)> {
 	let state = State { mode: Mode::Markdown };
 	let mut data = vec![(Vec::new(), 0)];
 	for child in node.children() {
 		let last = data.last_mut().unwrap();
-		state.convert(child, last);
+		state.convert(child, last, rules);
 		if last.1 >= 3000 && child.kind() == SyntaxKind::Parbreak {
 			data.push((Vec::new(), 0));
 		}
@@ -27,7 +29,12 @@ struct State {
 }
 
 impl State {
-	fn convert(mut self, node: &SyntaxNode, items: &mut (Vec<DataAnnotation>, usize)) {
+	fn convert(
+		mut self,
+		node: &SyntaxNode,
+		items: &mut (Vec<DataAnnotation>, usize),
+		rules: &Rules,
+	) {
 		let item = match node.kind() {
 			_ if self.mode == Mode::Math => DataAnnotation::new_markup(node.text().into()),
 			SyntaxKind::Text if self.mode == Mode::Markdown => {
@@ -43,7 +50,14 @@ impl State {
 			},
 			SyntaxKind::FuncCall => {
 				self.mode = Mode::Code;
-				DataAnnotation::new_markup(node.text().into())
+				let name = node.children().next().unwrap().text();
+				match rules.functions.get(name.as_str()) {
+					None => DataAnnotation::new_markup(node.text().into()),
+					Some(f) => DataAnnotation::new_interpreted_markup(
+						node.text().into(),
+						f.before.to_owned(),
+					),
+				}
 			},
 			SyntaxKind::HeadingMarker => {
 				DataAnnotation::new_interpreted_markup(node.text().into(), String::from("\n\n"))
@@ -76,7 +90,7 @@ impl State {
 		items.1 += node.text().chars().count();
 		items.0.push(item);
 		for child in node.children() {
-			self.convert(child, items);
+			self.convert(child, items, rules);
 		}
 		let item = match node.kind() {
 			SyntaxKind::Heading => {

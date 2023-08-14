@@ -1,16 +1,17 @@
 mod convert;
 mod output;
+mod rules;
 
 use clap::{Parser, ValueEnum};
 use languagetool_rust::{
 	check::{CheckRequest, Data},
-	error::Error,
 	server::ServerClient,
 };
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 use output::Position;
-use std::{fs, path::PathBuf, time::Duration};
+use rules::{Function, Rules};
+use std::{error::Error, fs, path::PathBuf, time::Duration};
 
 #[derive(ValueEnum, Clone, Debug)]
 enum Task {
@@ -36,11 +37,16 @@ struct Args {
 	/// Print results without annotations for easy regex evaluation
 	#[clap(short, long, default_value_t = false)]
 	plain: bool,
+
+	/// Path to rules file
+	#[clap(short, long, default_value = None)]
+	rules: Option<String>,
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Args::parse();
+
 	match args.task {
 		Task::Check => check(args).await?,
 		Task::Watch => watch(args).await?,
@@ -77,11 +83,19 @@ async fn watch(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 	Ok(())
 }
 
-async fn handle_file(client: &ServerClient, args: &Args, file: &PathBuf) -> Result<(), Error> {
+async fn handle_file(
+	client: &ServerClient,
+	args: &Args,
+	file: &PathBuf,
+) -> Result<(), Box<dyn Error>> {
 	let text = fs::read_to_string(&file)?;
+	let rules = match &args.rules {
+		None => Rules::new(),
+		Some(path) => Rules::load(path)?,
+	};
 
 	let root = typst_syntax::parse(&text);
-	let data = convert::convert(&root);
+	let data = convert::convert(&root, &rules);
 
 	if args.plain {
 		println!("START");
