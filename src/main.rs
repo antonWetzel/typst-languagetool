@@ -103,7 +103,7 @@ async fn handle_file(client: &ServerClient, args: &Args, file: &PathBuf) -> Resu
 		}
 	}
 	if args.plain {
-		println!("End");
+		println!("END");
 	}
 	Ok(())
 }
