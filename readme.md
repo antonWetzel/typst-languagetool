@@ -26,7 +26,6 @@ Spellcheck typst files with a local LanguageTool-Server.
 
 ## To-do
 
-- no file watcher mode
 - allow remote server
 - vs-codium/vs-code extension
 - choose used rules

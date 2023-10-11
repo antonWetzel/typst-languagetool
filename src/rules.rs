@@ -20,11 +20,7 @@ impl Rules {
 	pub fn load(path: &String) -> Result<Self, Box<dyn Error>> {
 		let file = File::open(path)?;
 		let reader = BufReader::new(file);
-
-		// Read the JSON contents of the file as an instance of `User`.
 		let rules = serde_json::from_reader(reader)?;
-
-		// Return the `User`.
 		Ok(rules)
 	}
 }
