@@ -174,6 +174,9 @@ impl State {
 					self.convert(child, output, rules);
 				}
 			},
+			SyntaxKind::Shorthand if node.text() == "~" => {
+				output.add_encoded(node.text().into(), String::from(" "));
+			},
 			SyntaxKind::Space if self.mode == Mode::Markdown => output.add_text(node.text().into()),
 			SyntaxKind::Parbreak => output.add_encoded(node.text().into(), String::from("\n\n")),
 			_ => {
