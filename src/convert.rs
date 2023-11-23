@@ -1,15 +1,19 @@
 use languagetool_rust::check::DataAnnotation;
 use typst_syntax::{SyntaxKind, SyntaxNode};
 
-use crate::{output, rules::Rules};
+use crate::rules::Rules;
 
-pub fn convert(node: &SyntaxNode, rules: &Rules) -> Vec<(Vec<DataAnnotation>, usize)> {
+pub fn convert(
+	node: &SyntaxNode,
+	rules: &Rules,
+	max_length: usize,
+) -> Vec<(Vec<DataAnnotation>, usize)> {
 	let state = State { mode: Mode::Markdown };
 	let mut output = Output::new();
 	for child in node.children() {
 		state.convert(child, &mut output, rules);
 		if child.kind() == SyntaxKind::Parbreak {
-			output.maybe_seperate();
+			output.maybe_seperate(max_length);
 		}
 	}
 	output.result()
@@ -96,8 +100,8 @@ impl Output {
 		}
 	}
 
-	pub fn maybe_seperate(&mut self) {
-		if self.items.last().unwrap().1 > 10_000 {
+	pub fn maybe_seperate(&mut self, max: usize) {
+		if self.items.last().unwrap().1 > max {
 			self.flush();
 			self.state = OutputState::Text(String::new());
 			self.items.push((Vec::new(), 0));
@@ -127,7 +131,7 @@ impl State {
 			SyntaxKind::Text if self.mode == Mode::Markdown => output.add_text(node.text().into()),
 			SyntaxKind::Equation => {
 				output.add_encoded(node.text().into(), String::from("0"));
-				self.skip(node, output);
+				Self::skip(node, output);
 			},
 			SyntaxKind::FuncCall => {
 				self.mode = Mode::Code;
@@ -163,7 +167,7 @@ impl State {
 			},
 			SyntaxKind::Ref => {
 				output.add_encoded(String::new(), String::from("X"));
-				self.skip(node, output);
+				Self::skip(node, output);
 			},
 			SyntaxKind::LeftBracket | SyntaxKind::RightBracket => {
 				output.add_encoded(node.text().into(), String::from("\n\n"));
@@ -179,7 +183,9 @@ impl State {
 			},
 			SyntaxKind::Space if self.mode == Mode::Markdown => output.add_text(node.text().into()),
 			SyntaxKind::Parbreak => output.add_encoded(node.text().into(), String::from("\n\n")),
-			SyntaxKind::SmartQuote if self.mode == Mode::Markdown => output.add_text(node.text().into()),
+			SyntaxKind::SmartQuote if self.mode == Mode::Markdown => {
+				output.add_text(node.text().into())
+			},
 			_ => {
 				output.add_markup(node.text().into());
 				for child in node.children() {
@@ -189,10 +195,10 @@ impl State {
 		}
 	}
 
-	fn skip(self, node: &SyntaxNode, output: &mut Output) {
+	fn skip(node: &SyntaxNode, output: &mut Output) {
 		output.add_markup(node.text().into());
 		for child in node.children() {
-			self.skip(child, output);
+			Self::skip(child, output);
 		}
 	}
 }

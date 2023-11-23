@@ -10,8 +10,13 @@ use languagetool_rust::{
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 use output::Position;
-use rules::{Function, Rules};
-use std::{error::Error, fs, path::PathBuf, time::Duration};
+use rules::Rules;
+use std::{
+	error::Error,
+	fs,
+	path::{Path, PathBuf},
+	time::Duration,
+};
 
 #[derive(ValueEnum, Clone, Debug)]
 enum Task {
@@ -46,6 +51,14 @@ struct Args {
 	#[clap(short = 'P', long, default_value = "8081")]
 	port: String,
 
+	/// Split long documents into smaller chunks
+	#[clap(long, default_value_t = 10_000)]
+	max_request_length: usize,
+
+	/// Overwrite `host`, `port` and `max-request-length` to the official API at `https://api.languagetoolplus.com`
+	#[clap(long, default_value_t = false)]
+	use_official_api: bool,
+
 	/// Path to rules file
 	#[clap(short, long, default_value = None)]
 	rules: Option<String>,
@@ -53,7 +66,13 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-	let args = Args::parse();
+	let mut args = Args::parse();
+
+	if args.use_official_api {
+		args.host = String::from("https://api.languagetoolplus.com");
+		args.port = String::new();
+		args.max_request_length = 1_000;
+	}
 
 	match args.task {
 		Task::Check => check(args).await?,
@@ -94,16 +113,16 @@ async fn watch(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 async fn handle_file(
 	client: &ServerClient,
 	args: &Args,
-	file: &PathBuf,
+	file: &Path,
 ) -> Result<(), Box<dyn Error>> {
-	let text = fs::read_to_string(&file)?;
+	let text = fs::read_to_string(file)?;
 	let rules = match &args.rules {
 		None => Rules::new(),
 		Some(path) => Rules::load(path)?,
 	};
 
 	let root = typst_syntax::parse(&text);
-	let data = convert::convert(&root, &rules);
+	let data = convert::convert(&root, &rules, args.max_request_length);
 
 	if args.plain {
 		println!("START");
@@ -119,9 +138,9 @@ async fn handle_file(
 
 		let response = &client.check(&req).await?;
 		if args.plain {
-			output::output_plain(&file, &mut position, response, items.1);
+			output::output_plain(file, &mut position, response, items.1);
 		} else {
-			output::output_pretty(&file, &mut position, response, items.1);
+			output::output_pretty(file, &mut position, response, items.1);
 		}
 	}
 	if args.plain {
