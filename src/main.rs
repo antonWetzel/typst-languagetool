@@ -38,6 +38,14 @@ struct Args {
 	#[clap(short, long, default_value_t = false)]
 	plain: bool,
 
+	/// Server Address
+	#[clap(short = 'H', long, default_value = "http://127.0.0.1")]
+	host: String,
+
+	/// Server Port
+	#[clap(short = 'P', long, default_value = "8081")]
+	port: String,
+
 	/// Path to rules file
 	#[clap(short, long, default_value = None)]
 	rules: Option<String>,
@@ -55,14 +63,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn check(args: Args) -> Result<(), Box<dyn std::error::Error>> {
-	let client = ServerClient::new("http://127.0.0.1", "8081");
+	let client = ServerClient::new(&args.host, &args.port);
 	handle_file(&client, &args, &args.path).await?;
 	Ok(())
 }
 
 async fn watch(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 	let (tx, rx) = std::sync::mpsc::channel();
-	let client = ServerClient::new("http://127.0.0.1", "8081");
+	let client = ServerClient::new(&args.host, &args.port);
 	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), None, tx)?;
 	watcher
 		.watcher()
