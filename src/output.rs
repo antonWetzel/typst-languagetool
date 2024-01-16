@@ -47,11 +47,23 @@ pub fn output_pretty(file: &Path, start: &mut Position, response: &CheckResponse
 fn print_pretty(file_name: &str, start: &Position, info: &Match) {
 	let start_buffer = info.offset.min(PRETTY_RANGE);
 
-	let context = start
-		.clone()
-		.content
-		.take(start_buffer + info.length + PRETTY_RANGE)
-		.collect::<String>();
+	let context = {
+		let full_str = start.content.as_str();
+		let mut char_idx = full_str.char_indices();
+		// Move to start of the match
+		char_idx.nth(start_buffer);
+		// Find the end index we want to always include
+		let end = char_idx
+			.clone()
+			.nth(info.length + PRETTY_RANGE)
+			.map_or(full_str.len(), |(idx, _)| idx);
+		// Find the end of the line after the start of the match
+		let line_end = char_idx
+			.find(|&(_, c)| c == '\n')
+			.map_or(full_str.len(), |(idx, _)| idx);
+		// If the end of the line comes first, we want to stop there
+		&full_str[..end.min(line_end)]
+	};
 
 	let mut annotations = Vec::new();
 	annotations.push(SourceAnnotation {
@@ -59,8 +71,16 @@ fn print_pretty(file_name: &str, start: &Position, info: &Match) {
 		annotation_type: AnnotationType::Info,
 		range: (start_buffer, start_buffer + info.length),
 	});
+
+	let pos = usize::min(
+		start_buffer + info.length + 2,
+		context.len().saturating_sub(1),
+	);
 	for replacement in &info.replacements {
-		let pos = start_buffer + info.length + 2;
+		// Ignore empty replacements
+		if replacement.value.trim().is_empty() {
+			continue;
+		}
 		annotations.push(SourceAnnotation {
 			label: &replacement.value,
 			annotation_type: AnnotationType::Help,
