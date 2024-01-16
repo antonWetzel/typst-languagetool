@@ -185,7 +185,6 @@ fn filter_response(response: &mut CheckResponse, dict: &HashSet<String>) {
 		let end = chars
 			.nth(ctx.length.wrapping_sub(1))
 			.map_or(ctx.text.len(), |(idx, _)| idx);
-        print!("({start}, {end})");
 		let word = &ctx.text[start..end];
 		if dict.contains(word) {
 			continue;
