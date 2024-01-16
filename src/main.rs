@@ -6,12 +6,14 @@ use clap::{Parser, ValueEnum};
 use languagetool_rust::{
 	check::{CheckRequest, Data},
 	server::ServerClient,
+	CheckResponse,
 };
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 use output::Position;
 use rules::Rules;
 use std::{
+	collections::HashSet,
 	error::Error,
 	fs,
 	path::{Path, PathBuf},
@@ -62,6 +64,10 @@ struct Args {
 	/// Path to rules file
 	#[clap(short, long, default_value = None)]
 	rules: Option<String>,
+
+	/// Path to dictionary file
+	#[clap(short = 'w', long, default_value = None)]
+	dictionary: Option<String>,
 }
 
 #[tokio::main]
@@ -74,20 +80,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		args.max_request_length = 1_000;
 	}
 
+	let dict = match args.dictionary {
+		Some(ref dict_path) => {
+			let dict_file = std::fs::read_to_string(dict_path)?;
+			dict_file
+				.lines()
+				.map(str::trim)
+				.map(str::to_owned)
+				.collect::<HashSet<String>>()
+		},
+		_ => Default::default(),
+	};
+
 	match args.task {
-		Task::Check => check(args).await?,
-		Task::Watch => watch(args).await?,
+		Task::Check => check(args, &dict).await?,
+		Task::Watch => watch(args, &dict).await?,
 	}
 	Ok(())
 }
 
-async fn check(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+async fn check(args: Args, dict: &HashSet<String>) -> Result<(), Box<dyn std::error::Error>> {
 	let client = ServerClient::new(&args.host, &args.port);
-	handle_file(&client, &args, &args.path).await?;
+	handle_file(&client, &args, &args.path, &dict).await?;
 	Ok(())
 }
 
-async fn watch(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+async fn watch(args: Args, dict: &HashSet<String>) -> Result<(), Box<dyn std::error::Error>> {
 	let (tx, rx) = std::sync::mpsc::channel();
 	let client = ServerClient::new(&args.host, &args.port);
 	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), None, tx)?;
@@ -101,7 +119,7 @@ async fn watch(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 				Some(ext) if ext == "typ" => {},
 				_ => continue,
 			}
-			handle_file(&client, &args, &event.path)
+			handle_file(&client, &args, &event.path, &dict)
 				.await
 				.unwrap_or_else(|err| println!("{}", err));
 		}
@@ -114,6 +132,7 @@ async fn handle_file(
 	client: &ServerClient,
 	args: &Args,
 	file: &Path,
+	dict: &HashSet<String>,
 ) -> Result<(), Box<dyn Error>> {
 	let text = fs::read_to_string(file)?;
 	let rules = match &args.rules {
@@ -136,7 +155,10 @@ async fn handle_file(
 			})
 			.with_data(Data::from_iter(items.0));
 
-		let response = &client.check(&req).await?;
+		let response = &mut client.check(&req).await?;
+
+		filter_response(response, dict);
+
 		if args.plain {
 			output::output_plain(file, &mut position, response, items.1);
 		} else {
@@ -147,4 +169,26 @@ async fn handle_file(
 		println!("END");
 	}
 	Ok(())
+}
+
+fn filter_response(response: &mut CheckResponse, dict: &HashSet<String>) {
+	for m in std::mem::take(&mut response.matches).into_iter() {
+		// Only handle misspellings
+		if m.rule.issue_type.as_str() != "misspelling" {
+			response.matches.push(m);
+			continue;
+		}
+		// Check if the word is contained in the dictionary
+		let ctx = &m.context;
+		let mut chars = ctx.text.char_indices();
+		let start = chars.nth(ctx.offset).map_or(0, |(idx, _)| idx);
+		let end = chars
+			.nth(ctx.length.wrapping_sub(1))
+			.map_or(ctx.text.len(), |(idx, _)| idx);
+		let word = &ctx.text[start..end];
+		if dict.contains(word) {
+			continue;
+		}
+		response.matches.push(m);
+	}
 }
