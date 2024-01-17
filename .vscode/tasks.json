@@ -37,7 +37,7 @@
 			"command": "java",
 			"args": [
 				"-cp",
-				"../LanguageTool-6.2/languagetool-server.jar",
+				"../LanguageTool-6.3/languagetool-server.jar",
 				"org.languagetool.server.HTTPServer",
 				"--port",
 				"8081",

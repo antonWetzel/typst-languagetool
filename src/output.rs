@@ -23,13 +23,15 @@ pub fn output_plain(file: &Path, start: &mut Position, response: &CheckResponse,
 			end.column,
 			info.message,
 		)
-		.unwrap();
+			.unwrap();
 		last = info.offset;
 	}
 	start.advance(total - last);
 }
 
+
 const PRETTY_RANGE: usize = 20;
+
 
 pub fn output_pretty(file: &Path, start: &mut Position, response: &CheckResponse, total: usize) {
 	let mut last = 0;
@@ -43,6 +45,7 @@ pub fn output_pretty(file: &Path, start: &mut Position, response: &CheckResponse
 	}
 	start.advance(total - last);
 }
+
 
 fn print_pretty(file_name: &str, start: &Position, info: &Match) {
 	let start_buffer = info.offset.min(PRETTY_RANGE);
@@ -64,18 +67,14 @@ fn print_pretty(file_name: &str, start: &Position, info: &Match) {
 		// If the end of the line comes first, we want to stop there
 		&full_str[..end.min(line_end)]
 	};
-
+	let end = start_buffer + info.length;
 	let mut annotations = Vec::new();
 	annotations.push(SourceAnnotation {
 		label: &info.message,
 		annotation_type: AnnotationType::Info,
-		range: (start_buffer, start_buffer + info.length),
+		range: (start_buffer, end),
 	});
 
-	let pos = usize::min(
-		start_buffer + info.length + 2,
-		context.len().saturating_sub(1),
-	);
 	for replacement in &info.replacements {
 		// Ignore empty replacements
 		if replacement.value.trim().is_empty() {
@@ -84,7 +83,7 @@ fn print_pretty(file_name: &str, start: &Position, info: &Match) {
 		annotations.push(SourceAnnotation {
 			label: &replacement.value,
 			annotation_type: AnnotationType::Help,
-			range: (pos, pos),
+			range: (end, end),
 		})
 	}
 
@@ -121,12 +120,14 @@ fn print_pretty(file_name: &str, start: &Position, info: &Match) {
 	println!("{}", DisplayList::from(snippet));
 }
 
+
 #[derive(Clone)]
 pub struct Position<'a> {
 	line: usize,
 	column: usize,
 	content: Chars<'a>,
 }
+
 
 impl<'a> Position<'a> {
 	pub fn new(content: &'a str) -> Self {
@@ -136,6 +137,7 @@ impl<'a> Position<'a> {
 			content: content.chars(),
 		}
 	}
+
 
 	fn advance(&mut self, amount: usize) {
 		for _ in 0..amount {
