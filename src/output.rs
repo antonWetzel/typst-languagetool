@@ -1,4 +1,4 @@
-use std::{io::stdout, io::Write, path::Path, str::Chars};
+use std::{io::stdout, io::Write, ops::Not, path::Path, str::Chars};
 
 use annotate_snippets::{
 	display_list::{DisplayList, FormatOptions},
@@ -6,14 +6,14 @@ use annotate_snippets::{
 };
 use languagetool_rust::{check::Match, CheckResponse};
 
-pub fn output_plain(file: &Path, start: &mut Position, response: &CheckResponse, total: usize) {
+pub fn output_plain(file: &Path, start: &mut Position, response: CheckResponse, total: usize) {
 	let mut last = 0;
 	let mut out = stdout().lock();
-	for info in &response.matches {
+	for info in response.matches {
 		start.advance(info.offset - last);
 		let mut end = start.clone();
 		end.advance(info.length);
-		writeln!(
+		write!(
 			out,
 			"{} {}:{}-{}:{} info {}",
 			file.display(),
@@ -23,17 +23,30 @@ pub fn output_plain(file: &Path, start: &mut Position, response: &CheckResponse,
 			end.column,
 			info.message,
 		)
-			.unwrap();
+		.unwrap();
+
+		let mut suggestions = info
+			.replacements
+			.into_iter()
+			.filter(|suggestion| suggestion.value.is_empty().not());
+		if let Some(first) = suggestions.next() {
+			write!(out, " ({}", first.value).unwrap();
+			for suggestion in suggestions {
+				write!(out, ", {}", suggestion.value).unwrap();
+			}
+			writeln!(out, ")").unwrap();
+		} else {
+			writeln!(out).unwrap();
+		}
+
 		last = info.offset;
 	}
 	start.advance(total - last);
 }
 
-
 const PRETTY_RANGE: usize = 20;
 
-
-pub fn output_pretty(file: &Path, start: &mut Position, response: &CheckResponse, total: usize) {
+pub fn output_pretty(file: &Path, start: &mut Position, response: CheckResponse, total: usize) {
 	let mut last = 0;
 	let file_name = format!("{}", file.display());
 	for info in &response.matches {
@@ -45,7 +58,6 @@ pub fn output_pretty(file: &Path, start: &mut Position, response: &CheckResponse
 	}
 	start.advance(total - last);
 }
-
 
 fn print_pretty(file_name: &str, start: &Position, info: &Match) {
 	let start_buffer = info.offset.min(PRETTY_RANGE);
@@ -120,14 +132,12 @@ fn print_pretty(file_name: &str, start: &Position, info: &Match) {
 	println!("{}", DisplayList::from(snippet));
 }
 
-
 #[derive(Clone)]
 pub struct Position<'a> {
 	line: usize,
 	column: usize,
 	content: Chars<'a>,
 }
-
 
 impl<'a> Position<'a> {
 	pub fn new(content: &'a str) -> Self {
@@ -137,7 +147,6 @@ impl<'a> Position<'a> {
 			content: content.chars(),
 		}
 	}
-
 
 	fn advance(&mut self, amount: usize) {
 		for _ in 0..amount {

@@ -155,9 +155,9 @@ async fn handle_file(
 			})
 			.with_data(Data::from_iter(items.0));
 
-		let response = &mut client.check(&req).await?;
+		let mut response = client.check(&req).await?;
 
-		filter_response(response, dict);
+		filter_response(&mut response, dict);
 
 		if args.plain {
 			output::output_plain(file, &mut position, response, items.1);
