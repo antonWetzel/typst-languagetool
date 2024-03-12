@@ -143,14 +143,7 @@ async fn main_loop(
 
 	eprintln!("starting client at {}:{}", options.host, options.port);
 	let client = ServerClient::new(&options.host, &options.port);
-	if client.ping().await.is_err() {
-		eprintln!("Couldn't ping the LanguageTool server. Did you start it?");
-		eprintln!("Waiting for the server to respond...");
-		while client.ping().await.is_err() {
-			eprintln!("Waiting for the server to respond...");
-			std::thread::sleep(std::time::Duration::from_millis(250));
-		}
-	}
+	check_languagetool_server(&client).await?;
 
 	for msg in &connection.receiver {
 		match msg {
@@ -260,6 +253,18 @@ async fn main_loop(
 			},
 		}
 	}
+	Ok(())
+}
+
+async fn check_languagetool_server(client: &ServerClient) -> Result<(), Box<dyn Error>> {
+	eprintln!("Waiting for the server to respond.");
+	for _ in 0..(4 * 60) {
+		if client.ping().await.is_ok() {
+			return Ok(());
+		}
+		std::thread::sleep(std::time::Duration::from_millis(250));
+	}
+	client.ping().await?;
 	Ok(())
 }
 
