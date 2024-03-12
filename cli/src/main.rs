@@ -1,21 +1,14 @@
-mod convert;
 mod output;
-mod rules;
 
 use clap::{Parser, ValueEnum};
-use languagetool_rust::{
-	check::{CheckRequest, Data},
-	server::ServerClient,
-	CheckResponse,
-};
+use languagetool_rust::server::ServerClient;
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 use output::Position;
-use rules::Rules;
 use std::{
 	collections::HashSet,
-	error::Error,
-	fs,
+	fs::File,
+	io::BufReader,
 	path::{Path, PathBuf},
 	time::Duration,
 };
@@ -46,11 +39,11 @@ struct Args {
 	plain: bool,
 
 	/// Server Address
-	#[clap(short = 'H', long, default_value = "http://127.0.0.1")]
+	#[clap(long, default_value = "http://127.0.0.1")]
 	host: String,
 
 	/// Server Port
-	#[clap(short = 'P', long, default_value = "8081")]
+	#[clap(long, default_value = "8081")]
 	port: String,
 
 	/// Split long documents into smaller chunks
@@ -101,7 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 async fn check(args: Args, dict: &HashSet<String>) -> Result<(), Box<dyn std::error::Error>> {
 	let client = ServerClient::new(&args.host, &args.port);
-	handle_file(&client, &args, &args.path, &dict).await?;
+	handle_file(&args.path, &client, &dict, &args).await?;
 	Ok(())
 }
 
@@ -119,76 +112,53 @@ async fn watch(args: Args, dict: &HashSet<String>) -> Result<(), Box<dyn std::er
 				Some(ext) if ext == "typ" => {},
 				_ => continue,
 			}
-			handle_file(&client, &args, &event.path, &dict)
-				.await
-				.unwrap_or_else(|err| println!("{}", err));
+			handle_file(&event.path, &client, dict, &args).await?;
 		}
 	}
-
 	Ok(())
 }
 
 async fn handle_file(
+	path: &Path,
 	client: &ServerClient,
-	args: &Args,
-	file: &Path,
 	dict: &HashSet<String>,
-) -> Result<(), Box<dyn Error>> {
-	let text = fs::read_to_string(file)?;
-	let rules = match &args.rules {
-		None => Rules::new(),
-		Some(path) => Rules::load(path)?,
-	};
+	args: &Args,
+) -> Result<(), Box<dyn std::error::Error>> {
+	let text = std::fs::read_to_string(path)?;
 
-	let root = typst_syntax::parse(&text);
-	let data = convert::convert(&root, &rules, args.max_request_length);
+	let rules = if let Some(path) = &args.rules {
+		let file = File::open(path)?;
+		let reader = BufReader::new(file);
+		serde_json::from_reader(reader)?
+	} else {
+		typst_languagetool::Rules::new()
+	};
 
 	if args.plain {
 		println!("START");
 	}
 	let mut position = Position::new(&text);
-	for items in data {
-		let req = CheckRequest::default()
-			.with_language(match &args.language {
-				Some(value) => value.clone(),
-				None => "auto".into(),
-			})
-			.with_data(Data::from_iter(items.0));
 
-		let mut response = client.check(&req).await?;
+	typst_languagetool::check(
+		&client,
+		&text,
+		args.language.as_ref().map(|s| s.as_str()),
+		&rules,
+		args.max_request_length,
+		dict,
+		|response, total| {
+			if args.plain {
+				output::output_plain(path, &mut position, response, total);
+			} else {
+				output::output_pretty(path, &mut position, response, total);
+			}
+		},
+	)
+	.await?;
 
-		filter_response(&mut response, dict);
-
-		if args.plain {
-			output::output_plain(file, &mut position, response, items.1);
-		} else {
-			output::output_pretty(file, &mut position, response, items.1);
-		}
-	}
 	if args.plain {
 		println!("END");
 	}
-	Ok(())
-}
 
-fn filter_response(response: &mut CheckResponse, dict: &HashSet<String>) {
-	for m in std::mem::take(&mut response.matches).into_iter() {
-		// Only handle misspellings
-		if m.rule.issue_type.as_str() != "misspelling" {
-			response.matches.push(m);
-			continue;
-		}
-		// Check if the word is contained in the dictionary
-		let ctx = &m.context;
-		let mut chars = ctx.text.char_indices();
-		let start = chars.nth(ctx.offset).map_or(0, |(idx, _)| idx);
-		let end = chars
-			.nth(ctx.length.wrapping_sub(1))
-			.map_or(ctx.text.len(), |(idx, _)| idx);
-		let word = &ctx.text[start..end];
-		if dict.contains(word) {
-			continue;
-		}
-		response.matches.push(m);
-	}
+	Ok(())
 }

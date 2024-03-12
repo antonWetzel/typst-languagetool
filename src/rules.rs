@@ -1,12 +1,12 @@
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, error::Error, fs::File, io::BufReader};
+use std::collections::HashMap;
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Rules {
 	pub functions: HashMap<String, Function>,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Serialize, Deserialize, Default, Debug, Clone)]
 pub struct Function {
 	pub before: String,
 	pub after: String,
@@ -15,12 +15,5 @@ pub struct Function {
 impl Rules {
 	pub fn new() -> Self {
 		Self { functions: HashMap::new() }
-	}
-
-	pub fn load(path: &String) -> Result<Self, Box<dyn Error>> {
-		let file = File::open(path)?;
-		let reader = BufReader::new(file);
-		let rules = serde_json::from_reader(reader)?;
-		Ok(rules)
 	}
 }

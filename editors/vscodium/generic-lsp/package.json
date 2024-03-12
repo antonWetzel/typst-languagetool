@@ -1,0 +1,74 @@
+{
+  "name": "generic-lsp",
+  "displayName": "Generic LSP",
+  "publisher": "antonWetzel",
+  "description": "",
+  "version": "0.0.1",
+  "engines": {
+    "vscode": "^1.87.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "*"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "generic-lsp.helloWorld",
+        "title": "Hello World"
+      }
+    ],
+    "configuration": {
+      "title": "Generic LSP",
+      "properties": {
+        "generic-lsp.configuration": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "description": "Configuration for one LSP.",
+            "properties": {
+              "lsp": {
+                "type": "string",
+                "description": "Path to LSP executable."
+              },
+              "language": {
+                "type": "string",
+                "description": "Language ID to active the LSP."
+              },
+              "options": {
+                "description": "Options for the LSP."
+              }
+            }
+          },
+          "default": {},
+          "description": "Configuration for the LSPs."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "npm run compile && npm run lint",
+    "lint": "eslint src --ext ts",
+    "test": "vscode-test"
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.87.0",
+    "@types/mocha": "^10.0.6",
+    "@types/node": "18.x",
+    "@typescript-eslint/eslint-plugin": "^7.0.2",
+    "@typescript-eslint/parser": "^7.0.2",
+    "eslint": "^8.56.0",
+    "typescript": "^5.3.3",
+    "@vscode/test-cli": "^0.0.6",
+    "@vscode/test-electron": "^2.3.9"
+  }
+}

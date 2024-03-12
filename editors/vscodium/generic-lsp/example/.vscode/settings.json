@@ -1,0 +1,11 @@
+{
+    "generic-lsp.configuration": [
+        {
+            "lsp": "typst-languagetool-lsp",
+            "language": "typst",
+            "options": {
+                "request_length": 1000,
+            },
+        }
+    ]
+}
