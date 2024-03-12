@@ -25,3 +25,15 @@ Spellcheck typst files with a local LanguageTool-Server.
 	- configure settings
 - save `<file>.typ`
 - hints should appear ~1 sec. later
+
+## LSP Options
+
+```rust
+language: Option<String> // Language Code like "en-US", empty for auto detect
+host: String // Host of the LanguageTool Server
+port: String, // Port of the LanguageTool Server
+request_length: usize, // length of a request to the LanguageTool Server
+rules: Rules, // Replacements rules, see 'src/rules.rs' for definition
+dictionary: HashSet<String>, // Always allowed words
+local_languagetool_folder: Option<PathBuf>, // Folder with the LanguageTool jar file, starts the server if provided
+```

@@ -1,5 +1,6 @@
 use std::collections::HashSet;
 use std::error::Error;
+use std::path::PathBuf;
 use std::str::Chars;
 
 use languagetool_rust::ServerClient;
@@ -17,7 +18,7 @@ use typst_languagetool::Rules;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-	eprintln!("starting generic LSP server");
+	eprintln!("starting LSP server");
 
 	let (connection, io_threads) = Connection::stdio();
 
@@ -51,7 +52,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 	Ok(())
 }
 
-#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(default)]
 struct Options {
 	language: Option<String>,
@@ -60,18 +61,31 @@ struct Options {
 	request_length: usize,
 	rules: Rules,
 	dictionary: HashSet<String>,
+	local_languagetool_folder: Option<PathBuf>,
 }
+
+const DEFAULT_HOST: &str = "http://127.0.0.1";
 
 impl Default for Options {
 	fn default() -> Self {
 		Self {
 			language: None,
-			host: "http://127.0.0.1".into(),
+			host: DEFAULT_HOST.into(),
 			port: "8081".into(),
 			request_length: 1000,
 			rules: Rules::new(),
 			dictionary: HashSet::new(),
+			local_languagetool_folder: None,
 		}
+	}
+}
+
+struct ServerProcess(std::process::Child);
+
+impl Drop for ServerProcess {
+	fn drop(&mut self) {
+		self.0.kill().unwrap();
+		eprintln!("Language tool process should close, but it likes to stay open");
 	}
 }
 
@@ -79,7 +93,7 @@ async fn main_loop(
 	connection: Connection,
 	params: serde_json::Value,
 ) -> Result<(), Box<dyn Error>> {
-	let options = (|| {
+	let mut options = (|| {
 		let params = serde_json::from_value::<InitializeParams>(params).ok()?;
 		let options = params.initialization_options?;
 		let options = serde_json::from_value(options).ok()?;
@@ -88,8 +102,55 @@ async fn main_loop(
 	})()
 	.unwrap_or(Options::default());
 
-	eprintln!("starting cliend at {}:{}", options.host, options.port);
+	eprintln!("{:#?}", options);
+
+	let _server = if let Some(path) = &options.local_languagetool_folder {
+		let mut jar = path.clone();
+		jar.push("languagetool-server.jar");
+
+		let mut config = path.clone();
+		config.push("server.properties");
+
+		if options.host.as_str() != DEFAULT_HOST {
+			eprint!(
+				"Overwritting host {:?} with {:?} because a local server is used.",
+				options.host, DEFAULT_HOST
+			);
+			options.host = DEFAULT_HOST.into();
+		}
+
+		match std::process::Command::new("java")
+			.arg("-cp")
+			.arg(jar)
+			.arg("org.languagetool.server.HTTPServer")
+			.arg("--config")
+			.arg(config)
+			.arg("--port")
+			.arg(&options.port)
+			.arg("--allow-origin")
+			.stdout(std::io::stderr())
+			.spawn()
+		{
+			Ok(server) => Some(ServerProcess(server)),
+			Err(err) => {
+				eprintln!("Failed to start server because {:?}", err);
+				None
+			},
+		}
+	} else {
+		None
+	};
+
+	eprintln!("starting client at {}:{}", options.host, options.port);
 	let client = ServerClient::new(&options.host, &options.port);
+	if client.ping().await.is_err() {
+		eprintln!("Couldn't ping the LanguageTool server. Did you start it?");
+		eprintln!("Waiting for the server to respond...");
+		while client.ping().await.is_err() {
+			eprintln!("Waiting for the server to respond...");
+			std::thread::sleep(std::time::Duration::from_millis(250));
+		}
+	}
 
 	for msg in &connection.receiver {
 		match msg {
