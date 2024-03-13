@@ -4,7 +4,9 @@ use std::path::PathBuf;
 use std::str::Chars;
 
 use languagetool_rust::ServerClient;
-use lsp_types::notification::{DidOpenTextDocument, DidSaveTextDocument, PublishDiagnostics};
+use lsp_types::notification::{
+	DidChangeConfiguration, DidOpenTextDocument, DidSaveTextDocument, PublishDiagnostics,
+};
 use lsp_types::request::CodeActionRequest;
 use lsp_types::{
 	CodeAction, CodeActionKind, CodeActionProviderCapability, CodeActionResponse, Diagnostic,
@@ -187,8 +189,7 @@ async fn main_loop(
 								.into(),
 							);
 						}
-						let response = Response::new_ok(id, serde_json::to_value(&action).unwrap());
-						connection.sender.send(Message::Response(response))?;
+						send_response::<CodeActionRequest>(&connection, id, Some(action))?;
 						continue;
 					},
 					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
@@ -211,15 +212,7 @@ async fn main_loop(
 							version: None,
 							diagnostics,
 						};
-						let notification = Notification::new(
-							<PublishDiagnostics as lsp_types::notification::Notification>::METHOD
-								.into(),
-							serde_json::to_value(&params).unwrap(),
-						);
-						connection
-							.sender
-							.send(Message::Notification(notification))?;
-
+						send_notification::<PublishDiagnostics>(&connection, params)?;
 						continue;
 					},
 					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
@@ -236,14 +229,24 @@ async fn main_loop(
 							version: None,
 							diagnostics,
 						};
-						let notification = Notification::new(
-							<PublishDiagnostics as lsp_types::notification::Notification>::METHOD
-								.into(),
-							serde_json::to_value(&params).unwrap(),
+						send_notification::<PublishDiagnostics>(&connection, params)?;
+						continue;
+					},
+					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+					Err(ExtractError::MethodMismatch(not)) => not,
+				};
+				let not = match cast_notification::<DidChangeConfiguration>(not) {
+					Ok(params) => {
+						let new_options = serde_json::from_value::<Options>(params.settings)?;
+						// todo: handle changes
+						assert_eq!(new_options.host, options.host);
+						assert_eq!(new_options.port, options.port);
+						assert_eq!(
+							new_options.local_languagetool_folder,
+							options.local_languagetool_folder,
 						);
-						connection
-							.sender
-							.send(Message::Notification(notification))?;
+						options = new_options;
+						eprintln!("{:#?}", options);
 						continue;
 					},
 					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
@@ -282,6 +285,43 @@ where
 	N::Params: serde::de::DeserializeOwned,
 {
 	not.extract(N::METHOD)
+}
+
+#[allow(dead_code)]
+fn send_request<R>(
+	connection: &Connection,
+	id: i32,
+	params: R::Params,
+) -> Result<(), Box<dyn Error>>
+where
+	R: lsp_types::request::Request,
+{
+	let message = Message::Request(Request::new(id.into(), R::METHOD.into(), params));
+	connection.sender.send(message)?;
+
+	Ok(())
+}
+
+fn send_response<R>(
+	connection: &Connection,
+	id: RequestId,
+	result: R::Result,
+) -> Result<(), Box<dyn Error>>
+where
+	R: lsp_types::request::Request,
+{
+	let message = Message::Response(Response::new_ok(id, result));
+	connection.sender.send(message)?;
+	Ok(())
+}
+
+fn send_notification<N>(connection: &Connection, params: N::Params) -> Result<(), Box<dyn Error>>
+where
+	N: lsp_types::notification::Notification,
+{
+	let message = Message::Notification(Notification::new(N::METHOD.into(), params));
+	connection.sender.send(message)?;
+	Ok(())
 }
 
 async fn get_diagnostics(
