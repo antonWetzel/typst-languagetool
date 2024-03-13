@@ -11,12 +11,15 @@ serde.workspace = true
 substring.workspace = true
 typst-syntax.workspace = true
 
+[features]
+print-converted = []
+
 [workspace]
 members = [".", "cli", "lsp"]
 
 [workspace.dependencies]
 typst-languagetool = { path = "." }
-annotate-snippets = "0.9.1"
+annotate-snippets = "0.10.2"
 clap = "4.3.21"
 languagetool-rust = "2.1.4"
 notify = "6.0.1"

@@ -124,7 +124,11 @@ async fn handle_file(
 	dict: &HashSet<String>,
 	args: &Args,
 ) -> Result<(), Box<dyn std::error::Error>> {
-	let text = std::fs::read_to_string(path)?;
+	let mut text = std::fs::read_to_string(path)?;
+	if !args.plain {
+		// annotate snippet uses 1 step for tab, while the terminal uses more
+		text = text.replace("\t", "    ");
+	}
 
 	let rules = if let Some(path) = &args.rules {
 		let file = File::open(path)?;

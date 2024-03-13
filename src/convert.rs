@@ -8,7 +8,7 @@ pub fn convert(
 	rules: &Rules,
 	max_length: usize,
 ) -> Vec<(Vec<DataAnnotation>, usize)> {
-	let state = State { mode: Mode::Markdown };
+	let state = State { mode: Mode::Text };
 	let mut output = Output::new();
 	for child in node.children() {
 		state.convert(child, &mut output, rules);
@@ -16,6 +16,8 @@ pub fn convert(
 			output.maybe_seperate(max_length);
 		}
 	}
+	#[cfg(feature = "print-converted")]
+	println!("=====\n{:}\n=====", output.converted_text);
 	output.result()
 }
 
@@ -28,6 +30,9 @@ enum OutputState {
 struct Output {
 	items: Vec<(Vec<DataAnnotation>, usize)>,
 	state: OutputState,
+
+	#[cfg(feature = "print-converted")]
+	converted_text: String,
 }
 
 impl Output {
@@ -35,6 +40,8 @@ impl Output {
 		Self {
 			items: vec![(Vec::new(), 0)],
 			state: OutputState::Text(String::new()),
+			#[cfg(feature = "print-converted")]
+			converted_text: String::new(),
 		}
 	}
 
@@ -50,6 +57,8 @@ impl Output {
 
 	// is possible without cloning, but not naive in safe rust
 	pub fn add_text(&mut self, text: String) {
+		#[cfg(feature = "print-converted")]
+		self.converted_text.push_str(&text);
 		self.state = match &self.state {
 			OutputState::Text(t) => OutputState::Text(t.clone() + &text),
 			OutputState::Markup(t) => {
@@ -77,6 +86,8 @@ impl Output {
 		}
 	}
 	pub fn add_encoded(&mut self, text: String, res: String) {
+		#[cfg(feature = "print-converted")]
+		self.converted_text.push_str(&res);
 		self.state = match &self.state {
 			OutputState::Text(t) => {
 				self.add_item(DataAnnotation::new_text(t.clone()));
@@ -116,8 +127,8 @@ impl Output {
 
 #[derive(PartialEq, Clone, Copy)]
 enum Mode {
-	Markdown,
-	Code,
+	Text,
+	Markup,
 }
 
 #[derive(Clone, Copy)]
@@ -128,13 +139,13 @@ struct State {
 impl State {
 	fn convert(mut self, node: &SyntaxNode, output: &mut Output, rules: &Rules) {
 		match node.kind() {
-			SyntaxKind::Text if self.mode == Mode::Markdown => output.add_text(node.text().into()),
+			SyntaxKind::Text if self.mode == Mode::Text => output.add_text(node.text().into()),
 			SyntaxKind::Equation => {
 				output.add_encoded(node.text().into(), String::from("0"));
 				Self::skip(node, output);
 			},
 			SyntaxKind::FuncCall => {
-				self.mode = Mode::Code;
+				self.mode = Mode::Markup;
 				let name = node.children().next().unwrap().text();
 				let rule = rules.functions.get(name.as_str());
 				if let Some(f) = rule {
@@ -153,13 +164,14 @@ impl State {
 			| SyntaxKind::LetBinding
 			| SyntaxKind::ShowRule
 			| SyntaxKind::SetRule => {
-				self.mode = Mode::Code;
+				self.mode = Mode::Markup;
 				for child in node.children() {
 					self.convert(child, output, rules);
 				}
 			},
 			SyntaxKind::Heading => {
 				output.add_encoded(String::new(), String::from("\n\n"));
+				self.mode = Mode::Markup;
 				for child in node.children() {
 					self.convert(child, output, rules);
 				}
@@ -173,7 +185,7 @@ impl State {
 				output.add_encoded(node.text().into(), String::from("\n\n"));
 			},
 			SyntaxKind::Markup => {
-				self.mode = Mode::Markdown;
+				self.mode = Mode::Text;
 				for child in node.children() {
 					self.convert(child, output, rules);
 				}
@@ -181,9 +193,25 @@ impl State {
 			SyntaxKind::Shorthand if node.text() == "~" => {
 				output.add_encoded(node.text().into(), String::from(" "));
 			},
-			SyntaxKind::Space if self.mode == Mode::Markdown => output.add_text(node.text().into()),
+			SyntaxKind::Space if self.mode == Mode::Text => {
+				// if there is whitespace after the linebreak ("...\n\t  "), only use ("...\n") as text
+				let linebreak = node.text().rfind(typst_syntax::is_newline).map(|x| x + 1);
+				match linebreak {
+					Some(linebreak) if linebreak < node.text().len() => {
+						output.add_encoded(node.text().into(), node.text()[0..linebreak].into())
+					},
+					_ => output.add_text(node.text().into()),
+				}
+			},
+			SyntaxKind::ListItem => {
+				self.mode = Mode::Markup;
+				for child in node.children() {
+					self.convert(child, output, rules);
+				}
+			},
+			SyntaxKind::ListMarker => output.add_encoded(node.text().into(), "- ".into()),
 			SyntaxKind::Parbreak => output.add_encoded(node.text().into(), String::from("\n\n")),
-			SyntaxKind::SmartQuote if self.mode == Mode::Markdown => {
+			SyntaxKind::SmartQuote if self.mode == Mode::Text => {
 				output.add_text(node.text().into())
 			},
 			_ => {

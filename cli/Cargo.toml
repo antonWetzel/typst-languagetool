@@ -9,6 +9,9 @@ edition = "2021"
 name = "typst-languagetool"
 path = "src/main.rs"
 
+[features]
+print-converted = ["typst-languagetool/print-converted"]
+
 [dependencies]
 typst-languagetool.workspace = true
 

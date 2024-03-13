@@ -1,9 +1,7 @@
 use std::{io::stdout, io::Write, ops::Not, path::Path, str::Chars};
 
-use annotate_snippets::{
-	display_list::{DisplayList, FormatOptions},
-	snippet::{Annotation, AnnotationType, Slice, Snippet, SourceAnnotation},
-};
+use annotate_snippets::{Annotation, AnnotationType, Renderer, Slice, Snippet, SourceAnnotation};
+
 use languagetool_rust::{check::Match, CheckResponse};
 
 pub fn output_plain(file: &Path, start: &mut Position, response: CheckResponse, total: usize) {
@@ -123,13 +121,9 @@ fn print_pretty(file_name: &str, start: &Position, info: &Match) {
 			fold: true,
 			annotations,
 		}],
-		opt: FormatOptions {
-			color: true,
-			anonymized_line_numbers: false,
-			margin: None,
-		},
 	};
-	println!("{}", DisplayList::from(snippet));
+	let renderer = Renderer::styled();
+	println!("{}", renderer.render(snippet));
 }
 
 #[derive(Clone)]
