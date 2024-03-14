@@ -1,3 +1,5 @@
+use std::ops::Not;
+
 use languagetool_rust::check::DataAnnotation;
 use typst_syntax::{SyntaxKind, SyntaxNode};
 
@@ -8,7 +10,7 @@ pub fn convert(
 	rules: &Rules,
 	max_length: usize,
 ) -> Vec<(Vec<DataAnnotation>, usize)> {
-	let state = State { mode: Mode::Text };
+	let state = State { mode: Mode::Text, after_argument: "" };
 	let mut output = Output::new();
 	for child in node.children() {
 		state.convert(child, &mut output, rules);
@@ -132,12 +134,13 @@ enum Mode {
 }
 
 #[derive(Clone, Copy)]
-struct State {
+struct State<'a> {
 	mode: Mode,
+	after_argument: &'a str,
 }
 
-impl State {
-	fn convert(mut self, node: &SyntaxNode, output: &mut Output, rules: &Rules) {
+impl<'a> State<'a> {
+	fn convert(mut self, node: &SyntaxNode, output: &mut Output, rules: &'a Rules) {
 		match node.kind() {
 			SyntaxKind::Text if self.mode == Mode::Text => output.add_text(node.text()),
 			SyntaxKind::Equation => {
@@ -150,6 +153,9 @@ impl State {
 				let rule = rules.functions.get(name.as_str());
 				if let Some(f) = rule {
 					output.add_encoded("", &f.before);
+					self.after_argument = &f.after_argument;
+				} else {
+					self.after_argument = "";
 				}
 				for child in node.children() {
 					self.convert(child, output, rules);
@@ -158,6 +164,17 @@ impl State {
 					output.add_encoded("", &f.after);
 				}
 			},
+			SyntaxKind::Args => {
+				for child in node.children() {
+					self.convert(child, output, rules);
+					if child.kind() == SyntaxKind::ContentBlock
+						&& self.after_argument.is_empty().not()
+					{
+						output.add_encoded("", self.after_argument);
+					}
+				}
+			},
+
 			SyntaxKind::Code
 			| SyntaxKind::ModuleImport
 			| SyntaxKind::ModuleInclude
