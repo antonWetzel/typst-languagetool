@@ -63,7 +63,7 @@ struct Options {
 	request_length: usize,
 	rules: Rules,
 	dictionary: HashSet<String>,
-	local_languagetool_folder: Option<PathBuf>,
+	local_languagetool_directory: Option<PathBuf>,
 }
 
 const DEFAULT_HOST: &str = "http://127.0.0.1";
@@ -77,7 +77,7 @@ impl Default for Options {
 			request_length: 1000,
 			rules: Rules::new(),
 			dictionary: HashSet::new(),
-			local_languagetool_folder: None,
+			local_languagetool_directory: None,
 		}
 	}
 }
@@ -106,9 +106,8 @@ async fn main_loop(
 
 	eprintln!("{:#?}", options);
 
-	let _server = if let Some(path) = &options.local_languagetool_folder {
-		let mut jar = path.clone();
-		jar.push("languagetool-server.jar");
+	let _server = if let Some(path) = &options.local_languagetool_directory {
+		let jar = path.join("languagetool-server.jar");
 
 		let mut config = path.clone();
 		config.push("server.properties");
@@ -121,18 +120,21 @@ async fn main_loop(
 			options.host = DEFAULT_HOST.into();
 		}
 
-		match std::process::Command::new("java")
+		let mut command = std::process::Command::new("java");
+		command
 			.arg("-cp")
 			.arg(jar)
 			.arg("org.languagetool.server.HTTPServer")
-			.arg("--config")
-			.arg(config)
 			.arg("--port")
 			.arg(&options.port)
 			.arg("--allow-origin")
-			.stdout(std::io::stderr())
-			.spawn()
-		{
+			.stdout(std::io::stderr());
+
+		if config.exists() {
+			command.arg("--config").arg(config);
+		}
+
+		match command.spawn() {
 			Ok(server) => Some(ServerProcess(server)),
 			Err(err) => {
 				eprintln!("Failed to start server because {:?}", err);
@@ -242,8 +244,8 @@ async fn main_loop(
 						assert_eq!(new_options.host, options.host);
 						assert_eq!(new_options.port, options.port);
 						assert_eq!(
-							new_options.local_languagetool_folder,
-							options.local_languagetool_folder,
+							new_options.local_languagetool_directory,
+							options.local_languagetool_directory,
 						);
 						options = new_options;
 						eprintln!("{:#?}", options);
