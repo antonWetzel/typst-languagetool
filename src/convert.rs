@@ -56,48 +56,48 @@ impl Output {
 	}
 
 	// is possible without cloning, but not naive in safe rust
-	pub fn add_text(&mut self, text: String) {
+	pub fn add_text(&mut self, text: &str) {
 		#[cfg(feature = "print-converted")]
-		self.converted_text.push_str(&text);
+		self.converted_text.push_str(text);
 		self.state = match &self.state {
 			OutputState::Text(t) => OutputState::Text(t.clone() + &text),
 			OutputState::Markup(t) => {
 				self.add_item(DataAnnotation::new_markup(t.clone()));
-				OutputState::Text(text)
+				OutputState::Text(text.into())
 			},
 			OutputState::Encoded(t, a) => {
 				self.add_item(DataAnnotation::new_interpreted_markup(t.clone(), a.clone()));
-				OutputState::Text(text)
+				OutputState::Text(text.into())
 			},
 		}
 	}
 
-	pub fn add_markup(&mut self, text: String) {
+	pub fn add_markup(&mut self, text: &str) {
 		self.state = match &self.state {
 			OutputState::Text(t) => {
 				self.add_item(DataAnnotation::new_text(t.clone()));
-				OutputState::Markup(text)
+				OutputState::Markup(text.into())
 			},
-			OutputState::Markup(t) => OutputState::Markup(t.clone() + &text),
+			OutputState::Markup(t) => OutputState::Markup(t.clone() + text),
 			OutputState::Encoded(t, a) => {
 				self.add_item(DataAnnotation::new_interpreted_markup(t.clone(), a.clone()));
-				OutputState::Markup(text)
+				OutputState::Markup(text.into())
 			},
 		}
 	}
-	pub fn add_encoded(&mut self, text: String, res: String) {
+	pub fn add_encoded(&mut self, text: &str, res: &str) {
 		#[cfg(feature = "print-converted")]
-		self.converted_text.push_str(&res);
+		self.converted_text.push_str(res);
 		self.state = match &self.state {
 			OutputState::Text(t) => {
 				self.add_item(DataAnnotation::new_text(t.clone()));
-				OutputState::Encoded(text, res)
+				OutputState::Encoded(text.into(), res.into())
 			},
 			OutputState::Markup(t) => {
 				self.add_item(DataAnnotation::new_markup(t.clone()));
-				OutputState::Encoded(text, res)
+				OutputState::Encoded(text.into(), res.into())
 			},
-			OutputState::Encoded(t, a) => OutputState::Encoded(t.clone() + &text, a.clone() + &res),
+			OutputState::Encoded(t, a) => OutputState::Encoded(t.clone() + &text, a.clone() + res),
 		}
 	}
 
@@ -139,9 +139,9 @@ struct State {
 impl State {
 	fn convert(mut self, node: &SyntaxNode, output: &mut Output, rules: &Rules) {
 		match node.kind() {
-			SyntaxKind::Text if self.mode == Mode::Text => output.add_text(node.text().into()),
+			SyntaxKind::Text if self.mode == Mode::Text => output.add_text(node.text()),
 			SyntaxKind::Equation => {
-				output.add_encoded(node.text().into(), String::from("0"));
+				output.add_encoded(node.text(), "0");
 				Self::skip(node, output);
 			},
 			SyntaxKind::FuncCall => {
@@ -149,13 +149,13 @@ impl State {
 				let name = node.children().next().unwrap().text();
 				let rule = rules.functions.get(name.as_str());
 				if let Some(f) = rule {
-					output.add_encoded(String::new(), f.before.to_owned());
+					output.add_encoded("", &f.before);
 				}
 				for child in node.children() {
 					self.convert(child, output, rules);
 				}
 				if let Some(f) = rule {
-					output.add_encoded(String::new(), f.after.to_owned());
+					output.add_encoded("", &f.after);
 				}
 			},
 			SyntaxKind::Code
@@ -170,19 +170,16 @@ impl State {
 				}
 			},
 			SyntaxKind::Heading => {
-				output.add_encoded(String::new(), String::from("\n\n"));
+				output.add_encoded("", "\n\n");
 				self.mode = Mode::Markup;
 				for child in node.children() {
 					self.convert(child, output, rules);
 				}
-				output.add_encoded(String::new(), String::from("\n\n"));
+				output.add_encoded("", "\n\n");
 			},
 			SyntaxKind::Ref => {
-				output.add_encoded(String::new(), String::from("X"));
+				output.add_encoded("", "X");
 				Self::skip(node, output);
-			},
-			SyntaxKind::LeftBracket | SyntaxKind::RightBracket => {
-				output.add_encoded(node.text().into(), String::from("\n\n"));
 			},
 			SyntaxKind::Markup => {
 				self.mode = Mode::Text;
@@ -191,16 +188,16 @@ impl State {
 				}
 			},
 			SyntaxKind::Shorthand if node.text() == "~" => {
-				output.add_encoded(node.text().into(), String::from(" "));
+				output.add_encoded(node.text(), " ");
 			},
 			SyntaxKind::Space if self.mode == Mode::Text => {
 				// if there is whitespace after the linebreak ("...\n\t  "), only use ("...\n") as text
 				let linebreak = node.text().rfind(typst_syntax::is_newline).map(|x| x + 1);
 				match linebreak {
 					Some(linebreak) if linebreak < node.text().len() => {
-						output.add_encoded(node.text().into(), node.text()[0..linebreak].into())
+						output.add_encoded(node.text(), &node.text()[0..linebreak])
 					},
-					_ => output.add_text(node.text().into()),
+					_ => output.add_text(node.text()),
 				}
 			},
 			SyntaxKind::ListItem => {
@@ -209,13 +206,25 @@ impl State {
 					self.convert(child, output, rules);
 				}
 			},
-			SyntaxKind::ListMarker => output.add_encoded(node.text().into(), "- ".into()),
-			SyntaxKind::Parbreak => output.add_encoded(node.text().into(), String::from("\n\n")),
-			SyntaxKind::SmartQuote if self.mode == Mode::Text => {
-				output.add_text(node.text().into())
+			SyntaxKind::ListMarker => output.add_encoded(node.text(), "- "),
+			SyntaxKind::Parbreak => output.add_encoded(node.text(), "\n\n"),
+			SyntaxKind::SmartQuote if self.mode == Mode::Text => output.add_text(node.text()),
+
+			SyntaxKind::Named => {
+				let name = node.children().next().unwrap().text();
+				let rule = rules.arguments.get(name.as_str());
+				if let Some(f) = rule {
+					output.add_encoded("", &f.before);
+				}
+				for child in node.children() {
+					self.convert(child, output, rules);
+				}
+				if let Some(f) = rule {
+					output.add_encoded("", &f.after);
+				}
 			},
 			_ => {
-				output.add_markup(node.text().into());
+				output.add_markup(node.text());
 				for child in node.children() {
 					self.convert(child, output, rules);
 				}
@@ -224,7 +233,7 @@ impl State {
 	}
 
 	fn skip(node: &SyntaxNode, output: &mut Output) {
-		output.add_markup(node.text().into());
+		output.add_markup(node.text());
 		for child in node.children() {
 			Self::skip(child, output);
 		}
