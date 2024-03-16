@@ -150,11 +150,11 @@ async fn handle_file(
 		&rules,
 		args.max_request_length,
 		dict,
-		|response, total| {
+		|response, _total| {
 			if args.plain {
-				output::output_plain(path, &mut position, response, total);
+				output::output_plain(path, &mut position, response);
 			} else {
-				output::output_pretty(path, &mut position, response, total);
+				output::output_pretty(path, &mut position, response, 30);
 			}
 		},
 	)

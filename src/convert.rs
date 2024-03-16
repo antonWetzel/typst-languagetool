@@ -149,8 +149,8 @@ impl<'a> State<'a> {
 			},
 			SyntaxKind::FuncCall => {
 				self.mode = Mode::Markup;
-				let name = node.children().next().unwrap().text();
-				let rule = rules.functions.get(name.as_str());
+				let name = get_function_name(node).unwrap_or("");
+				let rule = rules.functions.get(name);
 				if let Some(f) = rule {
 					output.add_encoded("", &f.before);
 					self.after_argument = &f.after_argument;
@@ -164,14 +164,12 @@ impl<'a> State<'a> {
 					output.add_encoded("", &f.after);
 				}
 			},
-			SyntaxKind::Args => {
+			SyntaxKind::ContentBlock => {
 				for child in node.children() {
 					self.convert(child, output, rules);
-					if child.kind() == SyntaxKind::ContentBlock
-						&& self.after_argument.is_empty().not()
-					{
-						output.add_encoded("", self.after_argument);
-					}
+				}
+				if self.after_argument.is_empty().not() {
+					output.add_encoded("", self.after_argument);
 				}
 			},
 
@@ -254,5 +252,14 @@ impl<'a> State<'a> {
 		for child in node.children() {
 			Self::skip(child, output);
 		}
+	}
+}
+
+fn get_function_name(node: &SyntaxNode) -> Option<&str> {
+	match node.kind() {
+		SyntaxKind::FuncCall => get_function_name(node.children().next()?),
+		SyntaxKind::Ident => Some(node.text().as_str()),
+		SyntaxKind::FieldAccess => get_function_name(node.children().last()?),
+		_ => None,
 	}
 }

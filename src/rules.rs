@@ -43,6 +43,22 @@ impl Rules {
 						after_argument: "\n".into(),
 					},
 				),
+				(
+					"header".into(),
+					Function {
+						before: String::new(),
+						after: String::new(),
+						after_argument: "\n".into(),
+					},
+				),
+				(
+					"cell".into(),
+					Function {
+						before: "\n".into(),
+						after: "\n".into(),
+						after_argument: String::new(),
+					},
+				),
 			]
 			.into_iter()
 			.collect(),
