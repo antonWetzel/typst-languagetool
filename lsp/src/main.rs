@@ -12,7 +12,7 @@ use lsp_types::{
 use lsp_types::{InitializeParams, ServerCapabilities};
 
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
-use typst_languagetool::{LanguageTool, Position, Rules};
+use typst_languagetool::{LanguageTool, Position, Rules, JVM};
 
 fn main() -> Result<(), Box<dyn Error>> {
 	eprintln!("starting LSP server");
@@ -88,7 +88,8 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 
 	eprintln!("{:#?}", options);
 
-	let mut lt = LanguageTool::new(&options.language)?;
+	let jvm = JVM::new()?;
+	let mut lt = LanguageTool::new(&jvm, &options.language)?;
 
 	for msg in &connection.receiver {
 		match msg {
@@ -148,7 +149,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 					Ok(params) => {
 						let content = params.text.unwrap();
 
-						let diagnostics = get_diagnostics(&content, &lt, &options)?;
+						let diagnostics = get_diagnostics(&content, &mut lt, &options)?;
 
 						let params = PublishDiagnosticsParams {
 							uri: params.text_document.uri,
@@ -165,7 +166,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 					Ok(params) => {
 						let content = params.text_document.text;
 
-						let diagnostics = get_diagnostics(&content, &lt, &options)?;
+						let diagnostics = get_diagnostics(&content, &mut lt, &options)?;
 
 						let params = PublishDiagnosticsParams {
 							uri: params.text_document.uri,
@@ -183,7 +184,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 						let new_options = serde_json::from_value::<Options>(params.settings)?;
 						// todo: handle changes
 						if new_options.language != options.language {
-							lt = LanguageTool::new(&new_options.language)?;
+							lt = LanguageTool::new(&jvm, &options.language)?;
 						}
 						options = new_options;
 						eprintln!("{:#?}", options);
@@ -254,7 +255,7 @@ where
 
 fn get_diagnostics(
 	text: &str,
-	lt: &LanguageTool,
+	lt: &mut LanguageTool,
 	options: &Options,
 ) -> Result<Vec<Diagnostic>, Box<dyn Error>> {
 	let mut position = Position::new(&text);

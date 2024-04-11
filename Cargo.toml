@@ -9,11 +9,10 @@ edition = "2021"
 serde.workspace = true
 substring.workspace = true
 typst-syntax.workspace = true
-j4rs.workspace = true
 clap.workspace = true
+jni = { version = "0.21.1", features = ["invocation"] }
 
 [build-dependencies]
-j4rs.workspace = true
 tempfile.workspace = true
 
 
@@ -33,5 +32,4 @@ typst-syntax = { git = "https://github.com/typst/typst.git", tag = "v0.11.0" }
 lsp-server = "0.7.6"
 lsp-types = "0.95.0"
 pollster = "0.3.0"
-j4rs = "0.18.0"
 tempfile = "3.10.1"

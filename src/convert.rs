@@ -4,11 +4,11 @@ use typst_syntax::{SyntaxKind, SyntaxNode};
 
 use crate::{rules::Rules, LanguageTool, TextBuilder};
 
-pub fn convert<'a>(
+pub fn convert<'a, 'b>(
 	node: &SyntaxNode,
 	rules: &Rules,
-	lt: &'a LanguageTool,
-) -> Result<TextBuilder<'a>, Box<dyn Error>> {
+	lt: &'b mut LanguageTool<'a>,
+) -> Result<TextBuilder<'a, 'b>, Box<dyn Error>> {
 	let state = State { mode: Mode::Text, after_argument: "" };
 	let mut text = lt.text_builder()?;
 	for child in node.children() {

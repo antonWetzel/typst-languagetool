@@ -1,6 +1,6 @@
-use std::ops::Not;
-
-use j4rs::{JvmBuilder, MavenArtifact};
+use std::env;
+use std::io::Write;
+use std::path::Path;
 
 fn main() {
 	println!("cargo::rerun-if-changed=build.rs");
@@ -12,25 +12,22 @@ fn main() {
 		"mvn" // I hope
 	};
 	let output = std::process::Command::new(command)
-		.arg("dependency:list")
-		.arg("-DoutputFile=class_path.txt")
+		.arg("dependency:build-classpath")
 		.output()
 		.unwrap();
-	println!("{:?}", String::from_utf8(output.stdout));
-	if output.status.success().not() {
-		panic!("Maven failed");
-	}
 
-	let content = std::fs::read_to_string("./class_path.txt").unwrap();
-	std::fs::remove_file("./class_path.txt").unwrap();
+	let output = String::from_utf8(output.stdout).unwrap();
+	let mut lines = output.lines();
+	lines
+		.find(|line| line.contains("Dependencies classpath:"))
+		.unwrap();
 
-	let jvm = JvmBuilder::new().build().unwrap();
-	for line in content.lines() {
-		let Some((id, _)) = line.split_once(":compile") else {
-			continue;
-		};
-		let id = id.trim().replace(":jar", "");
-		jvm.deploy_artifact(&MavenArtifact::from(id.trim()))
-			.unwrap();
-	}
+	let path = lines.next().unwrap();
+
+	let out_dir = env::var_os("OUT_DIR").unwrap();
+	let dest_path = Path::new(&out_dir).join("class_path.rs");
+	let mut dest = std::fs::File::create(dest_path).unwrap();
+	dest.write_all(b"const CLASS_PATH: &str = r###\"").unwrap();
+	dest.write_all(path.as_bytes()).unwrap();
+	dest.write_all(b"\"###;").unwrap();
 }

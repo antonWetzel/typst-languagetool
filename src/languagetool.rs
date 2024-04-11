@@ -1,183 +1,186 @@
 use std::error::Error;
 
-use j4rs::{Instance, InvocationArg, Jvm, JvmBuilder};
+use jni::{
+	objects::{JObject, JValue, JValueGen},
+	AttachGuard, InitArgsBuilder, JNIEnv, JavaVM,
+};
 
-pub struct LanguageTool {
-	jvm: Jvm,
-	lang_tool: Instance,
+pub struct LanguageTool<'a> {
+	lang_tool: JObject<'a>,
+	guard: AttachGuard<'a>,
 }
 
-impl LanguageTool {
-	pub fn new(lang: &str) -> Result<Self, Box<dyn Error>> {
-		// bad fix for the jassets folder
-		let home = concat!(env!("CARGO_MANIFEST_DIR"), "/target/release");
-		let jvm = JvmBuilder::new().with_base_path(home).build().unwrap();
+include!(concat!(env!("OUT_DIR"), "/class_path.rs"));
 
-		let lang_code = InvocationArg::try_from(lang).unwrap();
-		let lang = jvm
-			.invoke_static(
-				"org.languagetool.Languages",
-				"getLanguageForShortCode",
-				&[lang_code],
-			)
-			.unwrap();
+pub struct JVM {
+	jvm: JavaVM,
+}
 
-		let lang_tool = jvm
-			.create_instance(
-				"org.languagetool.JLanguageTool",
-				&[InvocationArg::try_from(lang).unwrap()],
-			)
-			.unwrap();
+impl JVM {
+	pub fn new() -> Result<Self, Box<dyn Error>> {
+		let jvm_args = InitArgsBuilder::new()
+			.version(jni::JNIVersion::V8)
+			.option(format!("-Djava.class.path={}", CLASS_PATH))
+			.build()?;
+		let jvm = JavaVM::new(jvm_args)?;
+		Ok(Self { jvm })
+	}
+}
 
-		Ok(Self { jvm, lang_tool })
+impl<'a> LanguageTool<'a> {
+	pub fn new(jvm: &'a JVM, lang: &str) -> Result<Self, Box<dyn Error>> {
+		let mut guard = jvm.jvm.attach_current_thread()?;
+		let lang_code = guard.new_string(lang)?;
+		let lang = guard.call_static_method(
+			"org/languagetool/Languages",
+			"getLanguageForShortCode",
+			"(Ljava/lang/String;)Lorg/languagetool/Language;",
+			&[JValue::Object(&lang_code)],
+		)?;
+
+		let lang_tool = guard.new_object(
+			"org/languagetool/JLanguageTool",
+			"(Lorg/languagetool/Language;)V",
+			&[lang.borrow()],
+		)?;
+
+		Ok(Self { lang_tool, guard })
 	}
 
-	pub fn text_builder(&self) -> Result<TextBuilder, Box<dyn Error>> {
-		let annotated_text_builder = self.jvm.create_instance(
-			"org.languagetool.markup.AnnotatedTextBuilder",
-			InvocationArg::empty(),
-		)?;
+	pub fn text_builder<'b>(&'b mut self) -> Result<TextBuilder<'a, 'b>, Box<dyn Error>> {
+		let annotated_text_builder =
+			self.guard
+				.new_object("org/languagetool/markup/AnnotatedTextBuilder", "()V", &[])?;
 		Ok(TextBuilder {
 			text_builder: annotated_text_builder,
-			jvm: &self.jvm,
+			env: &mut self.guard,
 		})
 	}
 
-	pub fn check(&self, text: TextBuilder) -> Result<Vec<Suggestion>, Box<dyn Error>> {
-		let annotated_text =
-			self.jvm
-				.invoke(&text.text_builder, "build", InvocationArg::empty())?;
+	pub fn check<'b>(
+		&mut self,
+		text: JValueGen<JObject<'a>>,
+	) -> Result<Vec<Suggestion>, Box<dyn Error>> {
+		let matches = self
+			.guard
+			.call_method(
+				&self.lang_tool,
+				"check",
+				"(Lorg/languagetool/markup/AnnotatedText;)Ljava/util/List;",
+				&[text.borrow()],
+			)?
+			.l()?;
 
-		let matches = self.jvm.invoke(
-			&self.lang_tool,
-			"check",
-			&[InvocationArg::try_from(annotated_text)?],
-		)?;
+		let list = self.guard.get_list(&matches)?;
+		let size = list.size(&mut self.guard)?;
 
-		let res = for_each(
-			&self.jvm,
-			&matches,
-			"org.languagetool.rules.RuleMatch",
-			|m| {
-				let start = self
-					.jvm
-					.invoke(&m, "getFromPos", InvocationArg::empty())
-					.unwrap();
-				let start = self.jvm.to_rust::<i32>(start).unwrap();
+		let mut suggestions = Vec::with_capacity(size as usize);
 
-				let end = self
-					.jvm
-					.invoke(&m, "getToPos", InvocationArg::empty())
-					.unwrap();
-				let end = self.jvm.to_rust::<i32>(end).unwrap();
+		for i in 0..size {
+			let Some(m) = list.get(&mut self.guard, i)? else {
+				continue;
+			};
+			let start = self.guard.call_method(&m, "getFromPos", "()I", &[])?.i()?;
+			let end = self.guard.call_method(&m, "getToPos", "()I", &[])?.i()?;
 
-				let message = self
-					.jvm
-					.invoke(&m, "getMessage", InvocationArg::empty())
-					.unwrap();
-				let message = self.jvm.to_rust::<String>(message).unwrap();
+			let message = self
+				.guard
+				.call_method(&m, "getMessage", "()Ljava/lang/String;", &[])?
+				.l()?;
+			let message = self.guard.get_string(&message.into())?.into();
 
-				let replacements = self
-					.jvm
-					.invoke(&m, "getSuggestedReplacements", InvocationArg::empty())
-					.unwrap();
+			let replacements = self
+				.guard
+				.call_method(&m, "getSuggestedReplacements", "()Ljava/util/List;", &[])?
+				.l()?;
+			let list = self.guard.get_list(&replacements)?;
+			let size = list.size(&mut self.guard)?;
+			let mut replacements = Vec::with_capacity(size as usize);
+			for i in 0..size {
+				let Some(replacement) = list.get(&mut self.guard, i)? else {
+					continue;
+				};
+				let replacement = self.guard.get_string(&replacement.into())?.into();
+				replacements.push(replacement);
+			}
 
-				let replacements = for_each(
-					&self.jvm,
-					&replacements,
-					"java.lang.String",
-					|replacement| {
-						let s = self.jvm.to_rust::<String>(replacement)?;
-						Ok(s)
-					},
-				)?;
+			let rule = self
+				.guard
+				.call_method(&m, "getRule", "()Lorg/languagetool/rules/Rule;", &[])?
+				.l()?;
+			let rule_id = self
+				.guard
+				.call_method(&rule, "getId", "()Ljava/lang/String;", &[])?
+				.l()?;
+			let rule_id = self.guard.get_string(&rule_id.into())?.into();
+			let rule_description = self
+				.guard
+				.call_method(&rule, "getDescription", "()Ljava/lang/String;", &[])?
+				.l()?;
+			let rule_description = self.guard.get_string(&rule_description.into())?.into();
 
-				let rule = self.jvm.invoke(&m, "getRule", InvocationArg::empty())?;
-				let rule_id = self.jvm.invoke(&rule, "getId", InvocationArg::empty())?;
-				let rule_id = self.jvm.to_rust::<String>(rule_id)?;
-				let rule_description =
-					self.jvm
-						.invoke(&rule, "getDescription", InvocationArg::empty())?;
-				let rule_description = self.jvm.to_rust::<String>(rule_description)?;
-
-				Ok(Suggestion {
-					start: start as usize,
-					end: end as usize,
-					replacements,
-					message,
-					rule_id,
-					rule_description,
-				})
-			},
-		)?;
-
-		Ok(res)
+			let suggestion = Suggestion {
+				start: start as usize,
+				end: end as usize,
+				replacements,
+				message,
+				rule_id,
+				rule_description,
+			};
+			suggestions.push(suggestion);
+		}
+		Ok(suggestions)
 	}
 }
 
-fn for_each<V>(
-	jvm: &Jvm,
-	instance: &Instance,
-	class: &str,
-	mut action: impl FnMut(Instance) -> Result<V, Box<dyn Error>>,
-) -> Result<Vec<V>, Box<dyn Error>> {
-	let size = jvm
-		.invoke(instance, "size", InvocationArg::empty())
-		.unwrap();
-	let size = jvm.to_rust::<i32>(size).unwrap();
-	let mut res = Vec::with_capacity(size as usize);
-	for i in 0..size {
-		let m = jvm
-			.invoke(
-				instance,
-				"get",
-				&[InvocationArg::try_from(i)
-					.unwrap()
-					.into_primitive()
-					.unwrap()],
-			)
-			.unwrap();
-		let m = jvm.cast(&m, class).unwrap();
-		let m = action(m)?;
-		res.push(m)
-	}
-	Ok(res)
+pub struct TextBuilder<'a, 'b> {
+	text_builder: JObject<'a>,
+	env: &'b mut JNIEnv<'a>,
 }
 
-pub struct TextBuilder<'a> {
-	text_builder: Instance,
-	jvm: &'a Jvm,
-}
-
-impl<'a> TextBuilder<'a> {
-	pub fn add_text(&self, text: &str) -> Result<(), Box<dyn Error>> {
-		self.jvm.invoke(
+impl<'a, 'b> TextBuilder<'a, 'b> {
+	pub fn add_text(&mut self, text: &str) -> Result<(), Box<dyn Error>> {
+		let text = self.env.new_string(text)?;
+		self.env.call_method(
 			&self.text_builder,
 			"addText",
-			&[InvocationArg::try_from(text)?],
+			"(Ljava/lang/String;)Lorg/languagetool/markup/AnnotatedTextBuilder;",
+			&[JValue::Object(&text)],
 		)?;
 		Ok(())
 	}
 
-	pub fn add_markup(&self, markup: &str) -> Result<(), Box<dyn Error>> {
-		self.jvm.invoke(
+	pub fn add_markup(&mut self, markup: &str) -> Result<(), Box<dyn Error>> {
+		let markup = self.env.new_string(markup)?;
+		self.env.call_method(
 			&self.text_builder,
 			"addMarkup",
-			&[InvocationArg::try_from(markup)?],
+			"(Ljava/lang/String;)Lorg/languagetool/markup/AnnotatedTextBuilder;",
+			&[JValue::Object(&markup)],
 		)?;
 		Ok(())
 	}
 
-	pub fn add_encoded(&self, markup: &str, text: &str) -> Result<(), Box<dyn Error>> {
-		self.jvm.invoke(
+	pub fn add_encoded(&mut self, markup: &str, text: &str) -> Result<(), Box<dyn Error>> {
+		let markup = self.env.new_string(markup)?;
+		let text = self.env.new_string(text)?;
+		self.env.call_method(
 			&self.text_builder,
 			"addMarkup",
-			&[
-				InvocationArg::try_from(markup)?,
-				InvocationArg::try_from(text)?,
-			],
+			"(Ljava/lang/String;Ljava/lang/String;)Lorg/languagetool/markup/AnnotatedTextBuilder;",
+			&[JValue::Object(&markup), JValue::Object(&text)],
 		)?;
 		Ok(())
+	}
+
+	pub fn finish(self) -> Result<JValueGen<JObject<'a>>, Box<dyn Error>> {
+		let annotated_text = self.env.call_method(
+			&self.text_builder,
+			"build",
+			"()Lorg/languagetool/markup/AnnotatedText;",
+			&[],
+		)?;
+		Ok(annotated_text)
 	}
 }
 

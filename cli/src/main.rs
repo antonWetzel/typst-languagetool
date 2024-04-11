@@ -3,7 +3,7 @@ mod output;
 use clap::{Parser, ValueEnum};
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
-use typst_languagetool::{LanguageTool, Position};
+use typst_languagetool::{LanguageTool, Position, JVM};
 
 use std::{
 	fs::File,
@@ -56,14 +56,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 fn check(args: Args) -> Result<(), Box<dyn std::error::Error>> {
-	let lt = LanguageTool::new(&args.language)?;
-	handle_file(&args.path, &lt, &args)?;
+	let jvm = JVM::new()?;
+	let mut lt = LanguageTool::new(&jvm, &args.language)?;
+	handle_file(&args.path, &mut lt, &args)?;
 	Ok(())
 }
 
 fn watch(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 	let (tx, rx) = std::sync::mpsc::channel();
-	let lt = LanguageTool::new(&args.language)?;
+	let jvm = JVM::new()?;
+	let mut lt = LanguageTool::new(&jvm, &args.language)?;
 	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), None, tx)?;
 	watcher
 		.watcher()
@@ -75,15 +77,15 @@ fn watch(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 				Some(ext) if ext == "typ" => {},
 				_ => continue,
 			}
-			handle_file(&event.path, &lt, &args)?;
+			handle_file(&event.path, &mut lt, &args)?;
 		}
 	}
 	Ok(())
 }
 
-fn handle_file(
+fn handle_file<'a>(
 	path: &Path,
-	lt: &LanguageTool,
+	lt: &mut LanguageTool<'a>,
 	args: &Args,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	let mut text = std::fs::read_to_string(path)?;
@@ -104,7 +106,7 @@ fn handle_file(
 		println!("START");
 	}
 	let mut position = Position::new(&text);
-	let suggestions = typst_languagetool::check(&lt, &text, &rules)?;
+	let suggestions = typst_languagetool::check(lt, &text, &rules)?;
 	for suggestion in suggestions {
 		if args.plain {
 			output_plain(path, &mut position, suggestion);
