@@ -12,9 +12,7 @@ path = "src/main.rs"
 [dependencies]
 typst-languagetool.workspace = true
 
-languagetool-rust.workspace = true
 lsp-server.workspace = true
 lsp-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-tokio.workspace = true

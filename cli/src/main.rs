@@ -1,17 +1,18 @@
 mod output;
 
 use clap::{Parser, ValueEnum};
-use languagetool_rust::server::ServerClient;
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
-use output::Position;
+use typst_languagetool::{LanguageTool, Position};
+
 use std::{
-	collections::HashSet,
 	fs::File,
 	io::BufReader,
 	path::{Path, PathBuf},
 	time::Duration,
 };
+
+use crate::output::{output_plain, output_pretty};
 
 #[derive(ValueEnum, Clone, Debug)]
 enum Task {
@@ -26,9 +27,9 @@ struct Args {
 	/// File to check, may be a folder with `watch`
 	path: PathBuf,
 
-	/// Document Language. Defaults to auto-detect, but explicit codes ("de-DE", "en-US", ...) enable more checks
-	#[clap(short, long, default_value = None)]
-	language: Option<String>,
+	/// Document Language. ("de-DE", "en-US", ...)
+	#[clap(short, long, default_value = "en-US")]
+	language: String,
 
 	/// Delay in seconds
 	#[clap(short, long, default_value_t = 0.1)]
@@ -38,69 +39,31 @@ struct Args {
 	#[clap(short, long, default_value_t = false)]
 	plain: bool,
 
-	/// Server Address
-	#[clap(long, default_value = "http://127.0.0.1")]
-	host: String,
-
-	/// Server Port
-	#[clap(long, default_value = "8081")]
-	port: String,
-
-	/// Split long documents into smaller chunks
-	#[clap(long, default_value_t = 10_000)]
-	max_request_length: usize,
-
-	/// Overwrite `host`, `port` and `max-request-length` to the official API at `https://api.languagetoolplus.com`
-	#[clap(long, default_value_t = false)]
-	use_official_api: bool,
-
 	/// Path to rules file
 	#[clap(short, long, default_value = None)]
 	rules: Option<String>,
-
-	/// Path to dictionary file
-	#[clap(short = 'w', long, default_value = None)]
-	dictionary: Option<String>,
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-	let mut args = Args::parse();
-
-	if args.use_official_api {
-		args.host = String::from("https://api.languagetoolplus.com");
-		args.port = String::new();
-		args.max_request_length = 1_000;
-	}
-
-	let dict = match args.dictionary {
-		Some(ref dict_path) => {
-			let dict_file = std::fs::read_to_string(dict_path)?;
-			dict_file
-				.lines()
-				.map(str::trim)
-				.map(str::to_owned)
-				.collect::<HashSet<String>>()
-		},
-		_ => Default::default(),
-	};
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+	let args = Args::parse();
 
 	match args.task {
-		Task::Check => check(args, &dict).await?,
-		Task::Watch => watch(args, &dict).await?,
+		Task::Check => check(args)?,
+		Task::Watch => watch(args)?,
 	}
+
 	Ok(())
 }
 
-async fn check(args: Args, dict: &HashSet<String>) -> Result<(), Box<dyn std::error::Error>> {
-	let client = ServerClient::new(&args.host, &args.port);
-	handle_file(&args.path, &client, &dict, &args).await?;
+fn check(args: Args) -> Result<(), Box<dyn std::error::Error>> {
+	let lt = LanguageTool::new(&args.language)?;
+	handle_file(&args.path, &lt, &args)?;
 	Ok(())
 }
 
-async fn watch(args: Args, dict: &HashSet<String>) -> Result<(), Box<dyn std::error::Error>> {
+fn watch(args: Args) -> Result<(), Box<dyn std::error::Error>> {
 	let (tx, rx) = std::sync::mpsc::channel();
-	let client = ServerClient::new(&args.host, &args.port);
+	let lt = LanguageTool::new(&args.language)?;
 	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), None, tx)?;
 	watcher
 		.watcher()
@@ -112,16 +75,15 @@ async fn watch(args: Args, dict: &HashSet<String>) -> Result<(), Box<dyn std::er
 				Some(ext) if ext == "typ" => {},
 				_ => continue,
 			}
-			handle_file(&event.path, &client, dict, &args).await?;
+			handle_file(&event.path, &lt, &args)?;
 		}
 	}
 	Ok(())
 }
 
-async fn handle_file(
+fn handle_file(
 	path: &Path,
-	client: &ServerClient,
-	dict: &HashSet<String>,
+	lt: &LanguageTool,
 	args: &Args,
 ) -> Result<(), Box<dyn std::error::Error>> {
 	let mut text = std::fs::read_to_string(path)?;
@@ -142,23 +104,14 @@ async fn handle_file(
 		println!("START");
 	}
 	let mut position = Position::new(&text);
-
-	typst_languagetool::check(
-		&client,
-		&text,
-		args.language.as_ref().map(|s| s.as_str()),
-		&rules,
-		args.max_request_length,
-		dict,
-		|response, _total| {
-			if args.plain {
-				output::output_plain(path, &mut position, response);
-			} else {
-				output::output_pretty(path, &mut position, response, 30);
-			}
-		},
-	)
-	.await?;
+	let suggestions = typst_languagetool::check(&lt, &text, &rules)?;
+	for suggestion in suggestions {
+		if args.plain {
+			output_plain(path, &mut position, suggestion);
+		} else {
+			output_pretty(path, &mut position, suggestion, 50);
+		}
+	}
 
 	if args.plain {
 		println!("END");

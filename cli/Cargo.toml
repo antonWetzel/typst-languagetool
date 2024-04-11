@@ -9,16 +9,11 @@ edition = "2021"
 name = "typst-languagetool"
 path = "src/main.rs"
 
-[features]
-print-converted = ["typst-languagetool/print-converted"]
-
 [dependencies]
 typst-languagetool.workspace = true
 
 notify.workspace = true
 notify-debouncer-mini.workspace = true
 clap.workspace = true
-languagetool-rust.workspace = true
 annotate-snippets.workspace = true
-tokio.workspace = true
 serde_json.workspace = true
