@@ -50,7 +50,7 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-#[serde(default, rename_all = "kebab-case")]
+#[serde(default)]
 struct Options {
 	language: String,
 	rules: Rules,
