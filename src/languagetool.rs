@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, ops::Not};
 
 use jni::{
 	objects::{JObject, JValue, JValueGen},
@@ -55,6 +55,46 @@ impl<'a> LanguageTool<'a> {
 			text_builder: annotated_text_builder,
 			env: &mut self.guard,
 		})
+	}
+
+	pub fn allow_words(&mut self, words: &[impl AsRef<str>]) -> Result<(), Box<dyn Error>> {
+		let rules = self
+			.guard
+			.call_method(
+				&self.lang_tool,
+				"getAllActiveRules",
+				"()Ljava/util/List;",
+				&[],
+			)?
+			.l()?;
+		let list = self.guard.get_list(&rules)?;
+		let args = self.guard.new_object("java/util/ArrayList", "()V", &[])?;
+		let args = self.guard.get_list(&args)?;
+		for word in words {
+			let word = self.guard.new_string(word)?;
+			args.add(&mut self.guard, &word)?;
+		}
+
+		for i in 0..list.size(&mut self.guard)? {
+			let Some(rule) = list.get(&mut self.guard, i)? else {
+				continue;
+			};
+			if self
+				.guard
+				.is_instance_of(&rule, "org/languagetool/rules/spelling/SpellingCheckRule")?
+				.not()
+			{
+				continue;
+			}
+
+			self.guard.call_method(
+				&rule,
+				"acceptPhrases",
+				"(Ljava/util/List;)V",
+				&[JValue::Object(args.as_ref())],
+			)?;
+		}
+		Ok(())
 	}
 
 	pub fn check<'b>(

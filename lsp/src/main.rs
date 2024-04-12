@@ -90,6 +90,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 
 	let jvm = JVM::new()?;
 	let mut lt = LanguageTool::new(&jvm, &options.language)?;
+	lt.allow_words(&options.dictionary)?;
 
 	for msg in &connection.receiver {
 		match msg {
@@ -182,10 +183,10 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 				let not = match cast_notification::<DidChangeConfiguration>(not) {
 					Ok(params) => {
 						let new_options = serde_json::from_value::<Options>(params.settings)?;
-						// todo: handle changes
 						if new_options.language != options.language {
 							lt = LanguageTool::new(&jvm, &options.language)?;
 						}
+						lt.allow_words(&new_options.dictionary)?;
 						options = new_options;
 						eprintln!("{:#?}", options);
 						continue;
