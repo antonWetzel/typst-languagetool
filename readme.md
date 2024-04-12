@@ -1,6 +1,6 @@
 # typst-languagetool
 
-Spellcheck typst files with a local LanguageTool-Server.
+Spellcheck typst files with LanguageTool.
 
 ## Done
 
@@ -14,26 +14,23 @@ Spellcheck typst files with a local LanguageTool-Server.
 
 
 - install java
-- download server from <https://dev.languagetool.org/http-server.html>
+- install maven
 - terminal
 	- install command line interface (CLI) version with `cargo install --git=https://github.com/antonWetzel/typst-languagetool cli`
-	- start server (see download website)
-	- `typst-languagetool --language=...` in root directory
+	- `typst-languagetool check ...` in root directory
 - vs-codium/vs-code
 	- install language server protocal (LSP) version with `cargo install --git=https://github.com/antonWetzel/typst-languagetool lsp`
 	- install generic lsp (`editors/vscodium/generic-lsp/generic-lsp-0.0.1.vsix`)
 	- configure settings
 - save `<file>.typ`
-- hints should appear ~1 sec. later
+- hints should appear
+	- first check takes longer
 
 ## LSP Options
 
 ```rust
-language: Option<String> // Language Code like "en-US", empty for auto detect
-host: String // Host of the LanguageTool Server
-port: String, // Port of the LanguageTool Server
-request_length: usize, // length of a request to the LanguageTool Server
+language: String // Language Code like "en-US"
 rules: Rules, // Replacements rules, see 'src/rules.rs' for definition
-dictionary: HashSet<String>, // Always allowed words
-local_languagetool_folder: Option<PathBuf>, // Folder with the LanguageTool jar file, starts the server if provided
+dictionary: Vec<String>, // Additional allowed words
+disabled_checks: Vec<String>, // Languagetool rules to ignore (WHITESPACE_RULE, ...)
 ```

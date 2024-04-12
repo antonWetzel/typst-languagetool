@@ -97,6 +97,23 @@ impl<'a> LanguageTool<'a> {
 		Ok(())
 	}
 
+	pub fn disable_checks(&mut self, checks: &[impl AsRef<str>]) -> Result<(), Box<dyn Error>> {
+		let args = self.guard.new_object("java/util/ArrayList", "()V", &[])?;
+		let args = self.guard.get_list(&args)?;
+		for check in checks {
+			let check = self.guard.new_string(check)?;
+			args.add(&mut self.guard, &check)?;
+		}
+
+		self.guard.call_method(
+			&self.lang_tool,
+			"disableRules",
+			"(Ljava/util/List;)V",
+			&[JValue::Object(args.as_ref())],
+		)?;
+		Ok(())
+	}
+
 	pub fn check<'b>(
 		&mut self,
 		text: JValueGen<JObject<'a>>,

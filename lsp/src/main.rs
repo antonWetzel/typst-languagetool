@@ -50,11 +50,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
-#[serde(default)]
+#[serde(default, rename_all = "kebab-case")]
 struct Options {
 	language: String,
 	rules: Rules,
 	dictionary: Vec<String>,
+	disabled_checks: Vec<String>,
 }
 
 impl Default for Options {
@@ -63,6 +64,7 @@ impl Default for Options {
 			language: "en-US".into(),
 			rules: Rules::new(),
 			dictionary: Vec::new(),
+			disabled_checks: Vec::new(),
 		}
 	}
 }
@@ -91,6 +93,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 	let jvm = JVM::new()?;
 	let mut lt = LanguageTool::new(&jvm, &options.language)?;
 	lt.allow_words(&options.dictionary)?;
+	lt.disable_checks(&options.disabled_checks)?;
 
 	for msg in &connection.receiver {
 		match msg {
@@ -186,8 +189,9 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 						if new_options.language != options.language {
 							lt = LanguageTool::new(&jvm, &options.language)?;
 						}
-						lt.allow_words(&new_options.dictionary)?;
 						options = new_options;
+						lt.allow_words(&options.dictionary)?;
+						lt.disable_checks(&options.disabled_checks)?;
 						eprintln!("{:#?}", options);
 						continue;
 					},

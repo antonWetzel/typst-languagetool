@@ -24,28 +24,32 @@ enum Task {
 struct Args {
 	task: Task,
 
-	/// File to check, may be a folder with `watch`
+	/// File to check, may be a folder with `watch`.
 	path: PathBuf,
 
-	/// Document Language. ("de-DE", "en-US", ...)
+	/// Document Language ("de-DE", "en-US", ...).
 	#[clap(short, long, default_value = "en-US")]
 	language: String,
 
-	/// Delay for file changes in seconds
-	#[clap(long, default_value_t = 0.1)]
+	/// Delay for file changes.
+	#[clap(long, default_value_t = 0.1, id = "SECONDS")]
 	delay: f64,
 
-	/// Print results without annotations for easy regex evaluation
+	/// Print results without annotations for easy regex evaluation.
 	#[clap(short, long, default_value_t = false)]
 	plain: bool,
 
-	/// Path to rules file
+	/// Path to rules file.
 	#[clap(short, long, default_value = None)]
 	rules: Option<PathBuf>,
 
-	//Path to dictionary file
+	/// Path to dictionary file.
 	#[clap(short, long, default_value = None)]
 	dictionary: Option<PathBuf>,
+
+	#[clap(long = "disabled-check", id = "ID")]
+	/// Languagetool Rule ID to ignore.
+	disabled_checks: Vec<String>,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -59,6 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 		let words = content.lines().collect::<Vec<_>>();
 		lt.allow_words(&words)?;
 	}
+	lt.disable_checks(&args.disabled_checks)?;
 
 	match args.task {
 		Task::Check => check(args, &mut lt)?,
@@ -75,7 +80,7 @@ fn check(args: Args, lt: &mut LanguageTool) -> Result<(), Box<dyn std::error::Er
 
 fn watch(args: Args, lt: &mut LanguageTool) -> Result<(), Box<dyn std::error::Error>> {
 	let (tx, rx) = std::sync::mpsc::channel();
-	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), None, tx)?;
+	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), tx)?;
 	watcher
 		.watcher()
 		.watch(&args.path, RecursiveMode::Recursive)?;
