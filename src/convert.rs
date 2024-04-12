@@ -97,8 +97,12 @@ impl<'a> State<'a> {
 					self.convert(child, output, rules)?;
 				}
 			},
-			SyntaxKind::Shorthand if node.text() == "~" => {
-				output.add_encoded(node.text(), " ")?;
+			SyntaxKind::Shorthand => match node.text().as_str() {
+				"~" => output.add_encoded(node.text(), " ")?,
+				"--" => output.add_encoded(node.text(), "-")?,
+				"---" => output.add_encoded(node.text(), "-")?,
+				"-?" => output.add_encoded(node.text(), "-")?,
+				_ => output.add_text(node.text())?,
 			},
 			SyntaxKind::Space if self.mode == Mode::Text => {
 				// if there is whitespace after the linebreak ("...\n\t  "), only use ("...\n") as text
