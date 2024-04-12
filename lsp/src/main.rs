@@ -82,13 +82,14 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 	let mut options = (|| {
 		let params = serde_json::from_value::<InitializeParams>(params).ok()?;
 		let options = params.initialization_options?;
-		let options = serde_json::from_value(options).ok()?;
 
+		let options = serde_ignored::deserialize(options, |path| {
+			eprintln!("unknown option: {}", path);
+		})
+		.ok()?;
 		Some(options)
 	})()
 	.unwrap_or(Options::default());
-
-	eprintln!("{:#?}", options);
 
 	let jvm = JVM::new()?;
 	let mut lt = LanguageTool::new(&jvm, &options.language)?;
@@ -143,10 +144,10 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
 					Err(ExtractError::MethodMismatch(req)) => req,
 				};
-				eprintln!("unkown request: {:?}", req);
+				eprintln!("unknown request: {:?}", req);
 			},
 			Message::Response(resp) => {
-				eprintln!("unkown response: {:?}", resp);
+				eprintln!("unknown response: {:?}", resp);
 			},
 			Message::Notification(not) => {
 				let not = match cast_notification::<DidSaveTextDocument>(not) {
@@ -185,14 +186,16 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 				};
 				let not = match cast_notification::<DidChangeConfiguration>(not) {
 					Ok(params) => {
-						let new_options = serde_json::from_value::<Options>(params.settings)?;
+						let new_options =
+							serde_ignored::deserialize::<_, _, Options>(params.settings, |path| {
+								eprintln!("unknown option: {}", path);
+							})?;
 						if new_options.language != options.language {
 							lt = LanguageTool::new(&jvm, &options.language)?;
 						}
 						options = new_options;
 						lt.allow_words(&options.dictionary)?;
 						lt.disable_checks(&options.disabled_checks)?;
-						eprintln!("{:#?}", options);
 						continue;
 					},
 					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),

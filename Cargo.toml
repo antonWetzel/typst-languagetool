@@ -26,3 +26,4 @@ typst-syntax = { git = "https://github.com/typst/typst.git", tag = "v0.11.0" }
 lsp-server = "0.7.6"
 lsp-types = "0.95.0"
 jni = { version = "0.21.1", features = ["invocation"] }
+serde_ignored = "0.1.10"
