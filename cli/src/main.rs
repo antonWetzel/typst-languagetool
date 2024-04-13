@@ -63,14 +63,15 @@ struct Args {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Args::parse();
 
-	#[cfg(not(feature = "bundle-jar"))]
-	let jvm = JVM::new(&args.jar_location)?;
 	#[cfg(feature = "bundle-jar")]
 	let jvm = if let Some(path) = &args.jar_location {
 		JVM::new(path)?
 	} else {
 		JVM::new_bundled()?
 	};
+
+	#[cfg(not(feature = "bundle-jar"))]
+	let jvm = JVM::new(&args.jar_location)?;
 
 	let mut lt = LanguageTool::new(&jvm, &args.language)?;
 

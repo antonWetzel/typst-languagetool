@@ -9,6 +9,10 @@ edition = "2021"
 name = "typst-languagetool-lsp"
 path = "src/main.rs"
 
+[features]
+default = []
+bundle-jar = ["typst-languagetool/bundle-jar"]
+
 [dependencies]
 typst-languagetool.workspace = true
 

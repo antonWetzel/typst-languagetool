@@ -56,6 +56,7 @@ struct Options {
 	rules: Rules,
 	dictionary: Vec<String>,
 	disabled_checks: Vec<String>,
+	jar_location: Option<String>,
 }
 
 impl Default for Options {
@@ -65,6 +66,7 @@ impl Default for Options {
 			rules: Rules::new(),
 			dictionary: Vec::new(),
 			disabled_checks: Vec::new(),
+			jar_location: None,
 		}
 	}
 }
@@ -75,6 +77,17 @@ impl Drop for ServerProcess {
 	fn drop(&mut self) {
 		self.0.kill().unwrap();
 		eprintln!("Language tool process should close, but it likes to stay open");
+	}
+}
+
+fn create_jvm(path: Option<&str>) -> Result<JVM, Box<dyn Error>> {
+	if let Some(path) = path {
+		return Ok(JVM::new(path)?);
+	} else {
+		#[cfg(feature = "bundle-jar")]
+		return Ok(JVM::new_bundled()?);
+		#[cfg(not(feature = "bundle-jar"))]
+		panic!("Missing jar location");
 	}
 }
 
@@ -90,8 +103,8 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 		Some(options)
 	})()
 	.unwrap_or(Options::default());
+	let jvm = create_jvm(options.jar_location.as_deref())?;
 
-	let jvm = JVM::new()?;
 	let mut lt = LanguageTool::new(&jvm, &options.language)?;
 	lt.allow_words(&options.dictionary)?;
 	lt.disable_checks(&options.disabled_checks)?;
