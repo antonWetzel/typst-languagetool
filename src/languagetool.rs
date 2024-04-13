@@ -10,20 +10,24 @@ pub struct LanguageTool<'a> {
 	guard: AttachGuard<'a>,
 }
 
-include!(concat!(env!("OUT_DIR"), "/class_path.rs"));
-
 pub struct JVM {
 	jvm: JavaVM,
 }
 
 impl JVM {
-	pub fn new() -> Result<Self, Box<dyn Error>> {
+	pub fn new(class_path: &str) -> Result<Self, Box<dyn Error>> {
 		let jvm_args = InitArgsBuilder::new()
 			.version(jni::JNIVersion::V8)
-			.option(format!("-Djava.class.path={}", CLASS_PATH))
+			.option(format!("-Djava.class.path={}", class_path))
 			.build()?;
 		let jvm = JavaVM::new(jvm_args)?;
 		Ok(Self { jvm })
+	}
+
+	#[cfg(feature = "bundle-jar")]
+	pub fn new_bundled() -> Result<Self, Box<dyn Error>> {
+		let path = concat!(env!("OUT_DIR"), "/languagetool.jar");
+		Self::new(path)
 	}
 }
 

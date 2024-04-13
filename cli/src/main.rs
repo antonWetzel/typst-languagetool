@@ -50,12 +50,28 @@ struct Args {
 	#[clap(long = "disabled-check", id = "ID")]
 	/// Languagetool Rule ID to ignore.
 	disabled_checks: Vec<String>,
+
+	#[cfg(feature = "bundle-jar")]
+	/// Custom location of the languagetool packed jar.
+	jar_location: Option<String>,
+
+	#[cfg(not(feature = "bundle-jar"))]
+	/// Location of the languagetool packed jar.
+	jar_location: String,
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Args::parse();
 
-	let jvm = JVM::new()?;
+	#[cfg(not(feature = "bundle-jar"))]
+	let jvm = JVM::new(&args.jar_location)?;
+	#[cfg(feature = "bundle-jar")]
+	let jvm = if let Some(path) = &args.jar_location {
+		JVM::new(path)?
+	} else {
+		JVM::new_bundled()?
+	};
+
 	let mut lt = LanguageTool::new(&jvm, &args.language)?;
 
 	if let Some(path) = &args.dictionary {
@@ -128,7 +144,6 @@ fn handle_file(
 			output_pretty(path, &mut position, suggestion, 50);
 		}
 	}
-
 	if args.plain {
 		println!("END");
 	}
