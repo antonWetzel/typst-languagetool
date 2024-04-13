@@ -11,10 +11,13 @@ Spellcheck typst files with LanguageTool.
 - lsp implementation
 
 ## Usage
-
-
 - install java
-- install maven
+- get JAR
+	1. downlaod JAR
+		- `todo`
+	1. bundle JAR
+		- install maven
+		- add `--features=bundle-jar`
 - terminal
 	- install command line interface (CLI) version with `cargo install --git=https://github.com/antonWetzel/typst-languagetool cli`
 	- `typst-languagetool check ...` in root directory
