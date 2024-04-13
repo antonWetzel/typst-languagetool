@@ -26,8 +26,7 @@ impl JVM {
 
 	#[cfg(feature = "bundle-jar")]
 	pub fn new_bundled() -> Result<Self, Box<dyn Error>> {
-		let path = concat!(env!("OUT_DIR"), "/languagetool.jar");
-		Self::new(path)
+		Self::new(include!(concat!(env!("OUT_DIR"), "./jar_path.rs")))
 	}
 }
 

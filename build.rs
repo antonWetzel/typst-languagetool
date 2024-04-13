@@ -4,6 +4,7 @@ fn main() {
 	#[cfg(feature = "bundle-jar")]
 	{
 		use std::env;
+		use std::io::Write;
 		use std::ops::Not;
 		use std::path::Path;
 
@@ -15,18 +16,31 @@ fn main() {
 			"mvn"
 		};
 		let output = std::process::Command::new(command)
-			.arg("package")
 			.current_dir(std::env::current_dir().unwrap().join("maven"))
+			.arg("clean")
+			.arg("install")
 			.output()
 			.unwrap();
+		let text = String::from_utf8(output.stdout).unwrap();
 		if output.status.success().not() {
-			panic!("{}", String::from_utf8(output.stdout).unwrap());
+			panic!("{}", text);
 		}
-
-		let out_dir = env::var_os("OUT_DIR").unwrap();
-		let dest_path = Path::new(&out_dir).join("languagetool.jar");
-		let _ = std::fs::remove_file(&dest_path);
-		println!("cargo::warning=Creatin JAR at {}.", dest_path.display());
-		std::fs::copy("./maven/target/no-1-jar-with-dependencies.jar", dest_path).unwrap();
+		let location = text
+			.lines()
+			.rev()
+			.find_map(|line| {
+				if line.contains("Installing").not() {
+					return None;
+				}
+				let (_, target) = line.split_once(" to ")?;
+				Some(target)
+			})
+			.unwrap();
+		println!("cargo::warning=JAR at {:?}.", location);
+		let out_dir = env::var("OUT_DIR").unwrap();
+		let dest_path = Path::new(&out_dir).join("jar_path.rs");
+		let mut f = std::fs::File::create(&dest_path).unwrap();
+		f.write_all(format!("r###\"{}\"###", location).as_bytes())
+			.unwrap();
 	}
 }
