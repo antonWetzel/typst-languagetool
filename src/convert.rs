@@ -1,16 +1,17 @@
 use std::{error::Error, ops::Not};
 
-use typst_syntax::{SyntaxKind, SyntaxNode};
+use jni::JNIEnv;
+use typst::syntax::{SyntaxKind, SyntaxNode};
 
-use crate::{rules::Rules, LanguageTool, TextBuilder};
+use crate::{rules::Rules, TextBuilder};
 
 pub fn convert<'a, 'b>(
 	node: &SyntaxNode,
 	rules: &Rules,
-	lt: &'b mut LanguageTool<'a>,
-) -> Result<TextBuilder<'a, 'b>, Box<dyn Error>> {
+	env: &'b mut JNIEnv<'a>,
+) -> anyhow::Result<TextBuilder<'a, 'b>> {
 	let state = State { mode: Mode::Text, after_argument: "" };
-	let mut text = lt.text_builder()?;
+	let mut text = TextBuilder::new(env)?;
 	for child in node.children() {
 		state.convert(child, &mut text, rules)?;
 	}
@@ -35,7 +36,7 @@ impl<'a> State<'a> {
 		node: &SyntaxNode,
 		output: &mut TextBuilder,
 		rules: &'a Rules,
-	) -> Result<(), Box<dyn Error>> {
+	) -> anyhow::Result<()> {
 		match node.kind() {
 			SyntaxKind::Text if self.mode == Mode::Text => output.add_text(node.text())?,
 			SyntaxKind::Equation => {
@@ -106,7 +107,7 @@ impl<'a> State<'a> {
 			},
 			SyntaxKind::Space if self.mode == Mode::Text => {
 				// if there is whitespace after the linebreak ("...\n\t  "), only use ("...\n") as text
-				let linebreak = node.text().rfind(typst_syntax::is_newline).map(|x| x + 1);
+				let linebreak = node.text().rfind(typst::syntax::is_newline).map(|x| x + 1);
 				match linebreak {
 					Some(linebreak) if linebreak < node.text().len() => {
 						output.add_encoded(node.text(), &node.text()[0..linebreak])?
@@ -147,7 +148,7 @@ impl<'a> State<'a> {
 		Ok(())
 	}
 
-	fn skip(node: &SyntaxNode, output: &mut TextBuilder) -> Result<(), Box<dyn Error>> {
+	fn skip(node: &SyntaxNode, output: &mut TextBuilder) -> anyhow::Result<()> {
 		output.add_markup(node.text())?;
 		for child in node.children() {
 			Self::skip(child, output)?;

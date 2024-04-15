@@ -12,9 +12,9 @@ use lsp_types::{
 use lsp_types::{InitializeParams, ServerCapabilities};
 
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
-use typst_languagetool::{LanguageTool, Position, Rules, JVM};
+use typst_languagetool::{LanguageTool, Rules, TextWithPosition};
 
-fn main() -> Result<(), Box<dyn Error>> {
+fn main() -> anyhow::Result<()> {
 	eprintln!("starting LSP server");
 
 	let (connection, io_threads) = Connection::stdio();
@@ -80,18 +80,18 @@ impl Drop for ServerProcess {
 	}
 }
 
-fn create_jvm(path: Option<&str>) -> Result<JVM, Box<dyn Error>> {
+fn create_lt(path: Option<&str>, lang: &str) -> anyhow::Result<LanguageTool> {
 	if let Some(path) = path {
-		return Ok(JVM::new(path)?);
+		return Ok(LanguageTool::new(path, lang)?);
 	} else {
 		#[cfg(feature = "bundle-jar")]
-		return Ok(JVM::new_bundled()?);
+		return Ok(LanguageTool::new_bundled(lang)?);
 		#[cfg(not(feature = "bundle-jar"))]
 		panic!("Missing jar location");
 	}
 }
 
-fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Box<dyn Error>> {
+fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Result<()> {
 	let mut options = (|| {
 		let params = serde_json::from_value::<InitializeParams>(params).ok()?;
 		let options = params.initialization_options?;
@@ -103,9 +103,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 		Some(options)
 	})()
 	.unwrap_or(Options::default());
-	let jvm = create_jvm(options.jar_location.as_deref())?;
-
-	let mut lt = LanguageTool::new(&jvm, &options.language)?;
+	let mut lt = create_lt(options.jar_location.as_deref(), &options.language)?;
 	lt.allow_words(&options.dictionary)?;
 	lt.disable_checks(&options.disabled_checks)?;
 
@@ -204,7 +202,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> Result<(), Bo
 								eprintln!("unknown option: {}", path);
 							})?;
 						if new_options.language != options.language {
-							lt = LanguageTool::new(&jvm, &options.language)?;
+							lt.change_language(&new_options.language)?;
 						}
 						options = new_options;
 						lt.allow_words(&options.dictionary)?;
@@ -238,11 +236,7 @@ where
 }
 
 #[allow(dead_code)]
-fn send_request<R>(
-	connection: &Connection,
-	id: i32,
-	params: R::Params,
-) -> Result<(), Box<dyn Error>>
+fn send_request<R>(connection: &Connection, id: i32, params: R::Params) -> anyhow::Result<()>
 where
 	R: lsp_types::request::Request,
 {
@@ -252,11 +246,7 @@ where
 	Ok(())
 }
 
-fn send_response<R>(
-	connection: &Connection,
-	id: RequestId,
-	result: R::Result,
-) -> Result<(), Box<dyn Error>>
+fn send_response<R>(connection: &Connection, id: RequestId, result: R::Result) -> anyhow::Result<()>
 where
 	R: lsp_types::request::Request,
 {
@@ -265,7 +255,7 @@ where
 	Ok(())
 }
 
-fn send_notification<N>(connection: &Connection, params: N::Params) -> Result<(), Box<dyn Error>>
+fn send_notification<N>(connection: &Connection, params: N::Params) -> anyhow::Result<()>
 where
 	N: lsp_types::notification::Notification,
 {
@@ -276,16 +266,17 @@ where
 
 fn get_diagnostics(
 	text: &str,
-	lt: &mut LanguageTool,
+	lt: &LanguageTool,
 	options: &Options,
-) -> Result<Vec<Diagnostic>, Box<dyn Error>> {
-	let mut position = Position::new(&text);
+) -> anyhow::Result<Vec<Diagnostic>> {
+	let mut position = TextWithPosition::new(&text);
 
-	let diagnostics = typst_languagetool::check(lt, text, &options.rules)?
+	let diagnostics = lt
+		.check_source(text, &options.rules)?
 		.into_iter()
 		.map(|suggestion| {
-			let start = position.seek(suggestion.start, false);
-			let end = position.seek(suggestion.end, false);
+			let start = position.get_position(suggestion.start, false);
+			let end = position.get_position(suggestion.end, false);
 
 			Diagnostic {
 				range: Range {

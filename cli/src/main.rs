@@ -3,7 +3,7 @@ mod output;
 use clap::{Parser, ValueEnum};
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
-use typst_languagetool::{LanguageTool, Position, JVM};
+use typst_languagetool::{LanguageTool, TextWithPosition};
 
 use std::{
 	fs::File,
@@ -60,20 +60,18 @@ struct Args {
 	jar_location: String,
 }
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn main() -> anyhow::Result<()> {
 	let args = Args::parse();
 
 	#[cfg(feature = "bundle-jar")]
-	let jvm = if let Some(path) = &args.jar_location {
-		JVM::new(path)?
+	let mut lt = if let Some(path) = &args.jar_location {
+		LanguageTool::new(path, &args.language)?
 	} else {
-		JVM::new_bundled()?
+		LanguageTool::new_bundled(&args.language)?
 	};
 
 	#[cfg(not(feature = "bundle-jar"))]
-	let jvm = JVM::new(&args.jar_location)?;
-
-	let mut lt = LanguageTool::new(&jvm, &args.language)?;
+	let mut lt = LanguageTool::new(&args.jar_location, &args.language)?;
 
 	if let Some(path) = &args.dictionary {
 		let content = std::fs::read_to_string(path)?;
@@ -90,12 +88,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 	Ok(())
 }
 
-fn check(args: Args, lt: &mut LanguageTool) -> Result<(), Box<dyn std::error::Error>> {
+fn check(args: Args, lt: &mut LanguageTool) -> anyhow::Result<()> {
 	handle_file(&args.path, lt, &args)?;
 	Ok(())
 }
 
-fn watch(args: Args, lt: &mut LanguageTool) -> Result<(), Box<dyn std::error::Error>> {
+fn watch(args: Args, lt: &mut LanguageTool) -> anyhow::Result<()> {
 	let (tx, rx) = std::sync::mpsc::channel();
 	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), tx)?;
 	watcher
@@ -114,11 +112,7 @@ fn watch(args: Args, lt: &mut LanguageTool) -> Result<(), Box<dyn std::error::Er
 	Ok(())
 }
 
-fn handle_file(
-	path: &Path,
-	lt: &mut LanguageTool,
-	args: &Args,
-) -> Result<(), Box<dyn std::error::Error>> {
+fn handle_file(path: &Path, lt: &LanguageTool, args: &Args) -> anyhow::Result<()> {
 	let mut text = std::fs::read_to_string(path)?;
 	if !args.plain {
 		// annotate snippet uses 1 step for tab, while the terminal uses more
@@ -136,8 +130,8 @@ fn handle_file(
 	if args.plain {
 		println!("START");
 	}
-	let mut position = Position::new(&text);
-	let suggestions = typst_languagetool::check(lt, &text, &rules)?;
+	let mut position = TextWithPosition::new(&text);
+	let suggestions = lt.check_source(&text, &rules)?;
 	for suggestion in suggestions {
 		if args.plain {
 			output_plain(path, &mut position, suggestion);

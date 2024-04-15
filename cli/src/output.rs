@@ -1,14 +1,14 @@
 use std::{io::stdout, io::Write, ops::Not, path::Path};
 
 use annotate_snippets::{Level, Renderer, Snippet};
-use typst_languagetool::{Position, Suggestion};
+use typst_languagetool::{Suggestion, TextWithPosition};
 
 const MAX_SUGGESTIONS: usize = 20;
 
-pub fn output_plain(file: &Path, position: &mut Position, suggestion: Suggestion) {
+pub fn output_plain(file: &Path, position: &mut TextWithPosition, suggestion: Suggestion) {
 	let mut out = stdout().lock();
-	let start = position.seek(suggestion.start, false);
-	let end = position.seek(suggestion.end, false);
+	let start = position.get_position(suggestion.start, false);
+	let end = position.get_position(suggestion.end, false);
 	write!(
 		out,
 		"{} {}:{}-{}:{} info {}",
@@ -39,16 +39,16 @@ pub fn output_plain(file: &Path, position: &mut Position, suggestion: Suggestion
 
 pub fn output_pretty(
 	file: &Path,
-	position: &mut Position,
+	position: &mut TextWithPosition,
 	suggestion: Suggestion,
 	context_range: usize,
 ) {
 	let file_name = format!("{}", file.display());
 
-	let start = position.seek(suggestion.start, false);
-	let pretty_start = position.seek(suggestion.start.saturating_sub(context_range), true);
-	let end = position.seek(suggestion.end, false);
-	let pretty_end = position.seek(suggestion.end + context_range, true);
+	let start = position.get_position(suggestion.start, false);
+	let pretty_start = position.get_position(suggestion.start.saturating_sub(context_range), true);
+	let end = position.get_position(suggestion.end, false);
+	let pretty_end = position.get_position(suggestion.end + context_range, true);
 
 	let mut snippet = Snippet::source(&position.substring(pretty_start.utf_8, pretty_end.utf_8))
 		.line_start(start.line + 1)
