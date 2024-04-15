@@ -1,21 +1,29 @@
-use std::{error::Error, ops::Not};
+use std::ops::Not;
 
-use jni::JNIEnv;
 use typst::syntax::{SyntaxKind, SyntaxNode};
 
-use crate::{rules::Rules, TextBuilder};
+use crate::rules::Rules;
 
-pub fn convert<'a, 'b>(
+pub trait TextBuilder {
+	fn add_text(&mut self, text: &str) -> anyhow::Result<()>;
+	fn add_markup(&mut self, markup: &str) -> anyhow::Result<()>;
+	fn add_encoded(&mut self, markup: &str, text: &str) -> anyhow::Result<()>;
+	// fn maybe_seperate(&mut self) {}
+}
+
+pub fn convert(
 	node: &SyntaxNode,
 	rules: &Rules,
-	env: &'b mut JNIEnv<'a>,
-) -> anyhow::Result<TextBuilder<'a, 'b>> {
+	text_builder: &mut impl TextBuilder,
+) -> anyhow::Result<()> {
 	let state = State { mode: Mode::Text, after_argument: "" };
-	let mut text = TextBuilder::new(env)?;
 	for child in node.children() {
-		state.convert(child, &mut text, rules)?;
+		state.convert(child, text_builder, rules)?;
+		// if child.kind() == SyntaxKind::Parbreak {
+		// 	text_builder.maybe_seperate();
+		// }
 	}
-	Ok(text)
+	Ok(())
 }
 
 #[derive(PartialEq, Clone, Copy)]
@@ -34,7 +42,7 @@ impl<'a> State<'a> {
 	fn convert(
 		mut self,
 		node: &SyntaxNode,
-		output: &mut TextBuilder,
+		output: &mut impl TextBuilder,
 		rules: &'a Rules,
 	) -> anyhow::Result<()> {
 		match node.kind() {
@@ -148,7 +156,7 @@ impl<'a> State<'a> {
 		Ok(())
 	}
 
-	fn skip(node: &SyntaxNode, output: &mut TextBuilder) -> anyhow::Result<()> {
+	fn skip(node: &SyntaxNode, output: &mut impl TextBuilder) -> anyhow::Result<()> {
 		output.add_markup(node.text())?;
 		for child in node.children() {
 			Self::skip(child, output)?;

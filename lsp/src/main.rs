@@ -1,5 +1,3 @@
-use std::error::Error;
-
 use lsp_types::notification::{
 	DidChangeConfiguration, DidOpenTextDocument, DidSaveTextDocument, PublishDiagnostics,
 };
@@ -56,7 +54,10 @@ struct Options {
 	rules: Rules,
 	dictionary: Vec<String>,
 	disabled_checks: Vec<String>,
+	bundled: bool,
 	jar_location: Option<String>,
+	host: Option<String>,
+	port: Option<String>,
 }
 
 impl Default for Options {
@@ -66,8 +67,26 @@ impl Default for Options {
 			rules: Rules::new(),
 			dictionary: Vec::new(),
 			disabled_checks: Vec::new(),
+			bundled: false,
 			jar_location: None,
+			host: None,
+			port: None,
 		}
+	}
+}
+
+impl Options {
+	fn create_lt(&self) -> anyhow::Result<Box<dyn LanguageTool>> {
+		let mut lt = typst_languagetool::new_languagetool(
+			self.bundled,
+			self.jar_location.as_ref(),
+			self.host.as_ref(),
+			self.port.as_ref(),
+			&self.language,
+		)?;
+		lt.allow_words(&self.dictionary)?;
+		lt.disable_checks(&self.disabled_checks)?;
+		Ok(lt)
 	}
 }
 
@@ -77,17 +96,6 @@ impl Drop for ServerProcess {
 	fn drop(&mut self) {
 		self.0.kill().unwrap();
 		eprintln!("Language tool process should close, but it likes to stay open");
-	}
-}
-
-fn create_lt(path: Option<&str>, lang: &str) -> anyhow::Result<LanguageTool> {
-	if let Some(path) = path {
-		return Ok(LanguageTool::new(path, lang)?);
-	} else {
-		#[cfg(feature = "bundle-jar")]
-		return Ok(LanguageTool::new_bundled(lang)?);
-		#[cfg(not(feature = "bundle-jar"))]
-		panic!("Missing jar location");
 	}
 }
 
@@ -103,9 +111,8 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Resul
 		Some(options)
 	})()
 	.unwrap_or(Options::default());
-	let mut lt = create_lt(options.jar_location.as_deref(), &options.language)?;
-	lt.allow_words(&options.dictionary)?;
-	lt.disable_checks(&options.disabled_checks)?;
+
+	let mut lt = options.create_lt()?;
 
 	for msg in &connection.receiver {
 		match msg {
@@ -165,7 +172,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Resul
 					Ok(params) => {
 						let content = params.text.unwrap();
 
-						let diagnostics = get_diagnostics(&content, &mut lt, &options)?;
+						let diagnostics = get_diagnostics(&content, lt.as_mut(), &options)?;
 
 						let params = PublishDiagnosticsParams {
 							uri: params.text_document.uri,
@@ -182,7 +189,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Resul
 					Ok(params) => {
 						let content = params.text_document.text;
 
-						let diagnostics = get_diagnostics(&content, &mut lt, &options)?;
+						let diagnostics = get_diagnostics(&content, lt.as_mut(), &options)?;
 
 						let params = PublishDiagnosticsParams {
 							uri: params.text_document.uri,
@@ -197,16 +204,11 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Resul
 				};
 				let not = match cast_notification::<DidChangeConfiguration>(not) {
 					Ok(params) => {
-						let new_options =
+						options =
 							serde_ignored::deserialize::<_, _, Options>(params.settings, |path| {
 								eprintln!("unknown option: {}", path);
 							})?;
-						if new_options.language != options.language {
-							lt.change_language(&new_options.language)?;
-						}
-						options = new_options;
-						lt.allow_words(&options.dictionary)?;
-						lt.disable_checks(&options.disabled_checks)?;
+						lt = options.create_lt()?;
 						continue;
 					},
 					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
@@ -266,7 +268,7 @@ where
 
 fn get_diagnostics(
 	text: &str,
-	lt: &LanguageTool,
+	lt: &dyn LanguageTool,
 	options: &Options,
 ) -> anyhow::Result<Vec<Diagnostic>> {
 	let mut position = TextWithPosition::new(&text);

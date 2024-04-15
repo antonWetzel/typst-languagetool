@@ -8,15 +8,20 @@ edition = "2021"
 [dependencies]
 serde.workspace = true
 typst.workspace = true
-jni.workspace = true
+jni = { workspace = true, optional = true }
 anyhow.workspace = true
+languagetool-rust = { workspace = true, optional = true }
+tokio = { workspace = true, optional = true }
 
 [workspace]
 members = [".", "cli", "lsp"]
 
 [features]
 default = []
-bundle-jar = []
+bundle-jar = ["dep:jni"]
+extern-jar = ["dep:jni"]
+remote-server = ["dep:tokio", "dep:languagetool-rust"]
+
 
 [workspace.dependencies]
 typst-languagetool = { path = "." }
@@ -32,3 +37,5 @@ lsp-types = "0.95.0"
 jni = { version = "0.21.1", features = ["invocation"] }
 serde_ignored = "0.1.10"
 anyhow = "1.0.71"
+languagetool-rust = "2.1.4"
+tokio = "1.37.0"

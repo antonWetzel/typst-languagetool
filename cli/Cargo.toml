@@ -12,6 +12,9 @@ path = "src/main.rs"
 [features]
 default = []
 bundle-jar = ["typst-languagetool/bundle-jar"]
+extern-jar = ["typst-languagetool/extern-jar"]
+remote-server = ["typst-languagetool/remote-server"]
+
 
 [dependencies]
 typst-languagetool.workspace = true

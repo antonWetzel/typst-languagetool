@@ -1,230 +1,55 @@
 mod convert;
 mod rules;
-mod text_builder;
+
+#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
+mod jni;
+#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
+pub use jni::LanguageToolJNI;
+
+#[cfg(feature = "remote-server")]
+mod remote;
+#[cfg(feature = "remote-server")]
+pub use remote::LanguageToolRemote;
 
 pub use rules::Rules;
-pub use text_builder::TextBuilder;
-use typst::syntax::SyntaxNode;
 
-use std::ops::Not;
-
-use jni::{
-	objects::{GlobalRef, JObject, JValue, JValueGen},
-	InitArgsBuilder, JNIEnv, JavaVM,
-};
-
-use crate::convert::convert;
-
-pub struct LanguageTool {
-	jvm: JavaVM,
-	lang_tool: GlobalRef,
+pub trait LanguageTool {
+	fn change_language(&mut self, lang: &str) -> anyhow::Result<()>;
+	fn allow_words(&mut self, words: &[String]) -> anyhow::Result<()>;
+	fn disable_checks(&mut self, checks: &[String]) -> anyhow::Result<()>;
+	fn check_source(&self, text: &str, rules: &Rules) -> anyhow::Result<Vec<Suggestion>>;
 }
 
-fn new_jvm(class_path: &str) -> anyhow::Result<JavaVM> {
-	let jvm_args = InitArgsBuilder::new()
-		.version(jni::JNIVersion::V8)
-		.option(format!("-Djava.class.path={}", class_path))
-		.build()?;
-	let jvm = JavaVM::new(jvm_args)?;
-	Ok(jvm)
-}
+pub fn new_languagetool(
+	bundled: bool,
+	jar_location: Option<&String>,
+	host: Option<&String>,
+	port: Option<&String>,
+	#[allow(unused)] language: &str,
+) -> anyhow::Result<Box<dyn LanguageTool>> {
+	let lt = match (bundled, jar_location, host, port) {
+		#[cfg(feature = "bundle-jar")]
+		(true, None, None, None) => Box::new(LanguageToolJNI::new_bundled(language)?),
+		#[cfg(not(feature = "bundle-jar"))]
+		(true, None, None, None) => Err(anyhow::anyhow!("Feature 'bundle-jar' is disabled."))?,
 
-impl LanguageTool {
-	pub fn new(class_path: &str, lang: &str) -> anyhow::Result<Self> {
-		let jvm = new_jvm(class_path)?;
-		let lang_tool = Self::create_lang_tool(lang, &jvm)?;
-		Ok(Self { lang_tool, jvm })
-	}
+		#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
+		(false, Some(path), None, None) => Box::new(LanguageToolJNI::new(path, language)?),
+		#[cfg(all(not(feature = "bundle-jar"), not(feature = "extern-jar")))]
+		(false, Some(_), None, None) => Err(anyhow::anyhow!(
+			"Features 'bundle-jar' and 'extern-jar' are disabled."
+		))?,
 
-	#[cfg(feature = "bundle-jar")]
-	pub fn new_bundled(lang: &str) -> anyhow::Result<Self> {
-		let jvm = new_jvm(include!(concat!(env!("OUT_DIR"), "./jar_path.rs")))?;
-		let lang_tool = Self::create_lang_tool(lang, &jvm)?;
-		Ok(Self { lang_tool, jvm })
-	}
+		#[cfg(feature = "remote-server")]
+		(false, None, Some(host), Some(port)) => Box::new(LanguageToolRemote::new(host, port, language)?),
+		#[cfg(not(feature = "remote-server"))]
+		(false, None, Some(_), Some(_)) => Err(anyhow::anyhow!("Feature 'remote-server' is disabled."))?,
 
-	fn create_lang_tool(lang: &str, jvm: &JavaVM) -> anyhow::Result<GlobalRef> {
-		let lang_tool = {
-			let mut guard = jvm.attach_current_thread()?;
-			let lang_code = guard.new_string(lang)?;
-			let lang = guard.call_static_method(
-				"org/languagetool/Languages",
-				"getLanguageForShortCode",
-				"(Ljava/lang/String;)Lorg/languagetool/Language;",
-				&[JValue::Object(&lang_code)],
-			)?;
-
-			let lang_tool = guard.new_object(
-				"org/languagetool/JLanguageTool",
-				"(Lorg/languagetool/Language;)V",
-				&[lang.borrow()],
-			)?;
-			guard.new_global_ref(lang_tool)?
-		};
-
-		Ok(lang_tool)
-	}
-
-	pub fn change_language(&mut self, lang: &str) -> anyhow::Result<()> {
-		self.lang_tool = Self::create_lang_tool(lang, &self.jvm)?;
-		Ok(())
-	}
-
-	pub fn check_source(&self, text: &str, rules: &Rules) -> anyhow::Result<Vec<Suggestion>> {
-		let mut guard = self.jvm.attach_current_thread()?;
-		let root = typst::syntax::parse(text);
-		let text = convert(&root, rules, &mut guard)?;
-		let text = text.finish()?;
-		let suggestions = Self::lt_request(&self.lang_tool, text, &mut guard)?;
-		Ok(suggestions)
-	}
-
-	pub fn check_ast_node(
-		&self,
-		node: &SyntaxNode,
-		rules: &Rules,
-	) -> anyhow::Result<Vec<Suggestion>> {
-		let mut guard = self.jvm.attach_current_thread()?;
-		let text = convert(node, rules, &mut guard)?;
-		let text = text.finish()?;
-		let suggestions = Self::lt_request(&self.lang_tool, text, &mut guard)?;
-		Ok(suggestions)
-	}
-
-	pub fn check_document(
-		&self,
-		root: SyntaxNode,
-		rules: &Rules,
-	) -> anyhow::Result<Vec<Suggestion>> {
-		todo!()
-	}
-
-	pub fn allow_words(&self, words: &[impl AsRef<str>]) -> anyhow::Result<()> {
-		let mut guard = self.jvm.attach_current_thread()?;
-		let rules = guard
-			.call_method(
-				&self.lang_tool,
-				"getAllActiveRules",
-				"()Ljava/util/List;",
-				&[],
-			)?
-			.l()?;
-		let list = guard.get_list(&rules)?;
-		let args = guard.new_object("java/util/ArrayList", "()V", &[])?;
-		let args = guard.get_list(&args)?;
-		for word in words {
-			let word = guard.new_string(word)?;
-			args.add(&mut guard, &word)?;
-		}
-
-		for i in 0..list.size(&mut guard)? {
-			let Some(rule) = list.get(&mut guard, i)? else {
-				continue;
-			};
-			if guard
-				.is_instance_of(&rule, "org/languagetool/rules/spelling/SpellingCheckRule")?
-				.not()
-			{
-				continue;
-			}
-
-			guard.call_method(
-				&rule,
-				"acceptPhrases",
-				"(Ljava/util/List;)V",
-				&[JValue::Object(args.as_ref())],
-			)?;
-		}
-		Ok(())
-	}
-
-	pub fn disable_checks(&self, checks: &[impl AsRef<str>]) -> anyhow::Result<()> {
-		let mut guard = self.jvm.attach_current_thread()?;
-		let args = guard.new_object("java/util/ArrayList", "()V", &[])?;
-		let args = guard.get_list(&args)?;
-		for check in checks {
-			let check = guard.new_string(check)?;
-			args.add(&mut guard, &check)?;
-		}
-
-		guard.call_method(
-			&self.lang_tool,
-			"disableRules",
-			"(Ljava/util/List;)V",
-			&[JValue::Object(args.as_ref())],
-		)?;
-		Ok(())
-	}
-
-	fn lt_request<'a>(
-		lang_tool: &JObject<'a>,
-		text: JValueGen<JObject<'a>>,
-		env: &mut JNIEnv<'a>,
-	) -> anyhow::Result<Vec<Suggestion>> {
-		let matches = env
-			.call_method(
-				lang_tool,
-				"check",
-				"(Lorg/languagetool/markup/AnnotatedText;)Ljava/util/List;",
-				&[text.borrow()],
-			)?
-			.l()?;
-
-		let list = env.get_list(&matches)?;
-		let size = list.size(env)?;
-
-		let mut suggestions = Vec::with_capacity(size as usize);
-
-		for i in 0..size {
-			let Some(m) = list.get(env, i)? else {
-				continue;
-			};
-			let start = env.call_method(&m, "getFromPos", "()I", &[])?.i()?;
-			let end = env.call_method(&m, "getToPos", "()I", &[])?.i()?;
-
-			let message = env
-				.call_method(&m, "getMessage", "()Ljava/lang/String;", &[])?
-				.l()?;
-			let message = env.get_string(&message.into())?.into();
-
-			let replacements = env
-				.call_method(&m, "getSuggestedReplacements", "()Ljava/util/List;", &[])?
-				.l()?;
-			let list = env.get_list(&replacements)?;
-			let size = list.size(env)?;
-			let mut replacements = Vec::with_capacity(size as usize);
-			for i in 0..size {
-				let Some(replacement) = list.get(env, i)? else {
-					continue;
-				};
-				let replacement = env.get_string(&replacement.into())?.into();
-				replacements.push(replacement);
-			}
-
-			let rule = env
-				.call_method(&m, "getRule", "()Lorg/languagetool/rules/Rule;", &[])?
-				.l()?;
-			let rule_id = env
-				.call_method(&rule, "getId", "()Ljava/lang/String;", &[])?
-				.l()?;
-			let rule_id = env.get_string(&rule_id.into())?.into();
-			let rule_description = env
-				.call_method(&rule, "getDescription", "()Ljava/lang/String;", &[])?
-				.l()?;
-			let rule_description = env.get_string(&rule_description.into())?.into();
-
-			let suggestion = Suggestion {
-				start: start as usize,
-				end: end as usize,
-				replacements,
-				message,
-				rule_id,
-				rule_description,
-			};
-			suggestions.push(suggestion);
-		}
-		Ok(suggestions)
-	}
+		_ => Err(anyhow::anyhow!(
+			"Exactly one of 'bundled', 'jar_location' or 'host and port' must be specified."
+		))?,
+	};
+	Ok(lt)
 }
 
 #[derive(Debug, Clone)]

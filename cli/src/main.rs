@@ -51,49 +51,58 @@ struct Args {
 	/// Languagetool Rule ID to ignore.
 	disabled_checks: Vec<String>,
 
-	#[cfg(feature = "bundle-jar")]
-	/// Custom location of the languagetool packed jar.
+	/// Use bundled languagetool jar.
+	#[clap(long, default_value_t = false)]
+	bundled: bool,
+
+	/// Custom location for the languagetool jar.
+	#[clap(long, default_value = None)]
 	jar_location: Option<String>,
 
-	#[cfg(not(feature = "bundle-jar"))]
-	/// Location of the languagetool packed jar.
-	jar_location: String,
+	/// Host for remote languagetool server.
+	#[clap(long, default_value = None)]
+	host: Option<String>,
+
+	/// Port for remote languagetool server.
+	#[clap(long, default_value = None)]
+	port: Option<String>,
 }
 
 fn main() -> anyhow::Result<()> {
 	let args = Args::parse();
 
-	#[cfg(feature = "bundle-jar")]
-	let mut lt = if let Some(path) = &args.jar_location {
-		LanguageTool::new(path, &args.language)?
-	} else {
-		LanguageTool::new_bundled(&args.language)?
-	};
-
-	#[cfg(not(feature = "bundle-jar"))]
-	let mut lt = LanguageTool::new(&args.jar_location, &args.language)?;
+	let mut lt = typst_languagetool::new_languagetool(
+		args.bundled,
+		args.jar_location.as_ref(),
+		args.host.as_ref(),
+		args.port.as_ref(),
+		&args.language,
+	)?;
 
 	if let Some(path) = &args.dictionary {
 		let content = std::fs::read_to_string(path)?;
-		let words = content.lines().collect::<Vec<_>>();
+		let words = content
+			.lines()
+			.map(|line| String::from(line))
+			.collect::<Vec<_>>();
 		lt.allow_words(&words)?;
 	}
 	lt.disable_checks(&args.disabled_checks)?;
 
 	match args.task {
-		Task::Check => check(args, &mut lt)?,
-		Task::Watch => watch(args, &mut lt)?,
+		Task::Check => check(args, lt.as_mut())?,
+		Task::Watch => watch(args, lt.as_mut())?,
 	}
 
 	Ok(())
 }
 
-fn check(args: Args, lt: &mut LanguageTool) -> anyhow::Result<()> {
+fn check(args: Args, lt: &mut dyn LanguageTool) -> anyhow::Result<()> {
 	handle_file(&args.path, lt, &args)?;
 	Ok(())
 }
 
-fn watch(args: Args, lt: &mut LanguageTool) -> anyhow::Result<()> {
+fn watch(args: Args, lt: &mut dyn LanguageTool) -> anyhow::Result<()> {
 	let (tx, rx) = std::sync::mpsc::channel();
 	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), tx)?;
 	watcher
@@ -112,7 +121,7 @@ fn watch(args: Args, lt: &mut LanguageTool) -> anyhow::Result<()> {
 	Ok(())
 }
 
-fn handle_file(path: &Path, lt: &LanguageTool, args: &Args) -> anyhow::Result<()> {
+fn handle_file(path: &Path, lt: &dyn LanguageTool, args: &Args) -> anyhow::Result<()> {
 	let mut text = std::fs::read_to_string(path)?;
 	if !args.plain {
 		// annotate snippet uses 1 step for tab, while the terminal uses more
