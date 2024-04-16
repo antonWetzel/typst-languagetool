@@ -1,5 +1,6 @@
 use lsp_types::notification::{
-	DidChangeConfiguration, DidOpenTextDocument, DidSaveTextDocument, PublishDiagnostics,
+	Cancel, DidChangeConfiguration, DidOpenTextDocument, DidSaveTextDocument, PublishDiagnostics,
+	SetTrace,
 };
 use lsp_types::request::CodeActionRequest;
 use lsp_types::{
@@ -168,6 +169,22 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Resul
 				eprintln!("unknown response: {:?}", resp);
 			},
 			Message::Notification(not) => {
+				let not = match cast_notification::<Cancel>(not) {
+					Ok(_params) => {
+						continue;
+					},
+					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+					Err(ExtractError::MethodMismatch(not)) => not,
+				};
+
+				let not = match cast_notification::<SetTrace>(not) {
+					Ok(_params) => {
+						continue;
+					},
+					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+					Err(ExtractError::MethodMismatch(not)) => not,
+				};
+
 				let not = match cast_notification::<DidSaveTextDocument>(not) {
 					Ok(params) => {
 						let content = params.text.unwrap();
