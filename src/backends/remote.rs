@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use languagetool_rust::{CheckRequest, ServerClient};
 use tokio::runtime::Runtime;
 
@@ -10,6 +12,7 @@ pub struct LanguageToolRemote {
 	lang: String,
 	server_client: ServerClient,
 	disabled_categories: Option<Vec<String>>,
+	allowed_words: Option<HashSet<String>>,
 	runtime: Runtime,
 }
 
@@ -20,6 +23,7 @@ impl LanguageToolRemote {
 			server_client,
 			lang: lang.into(),
 			disabled_categories: None,
+			allowed_words: None,
 			runtime: Runtime::new()?,
 		})
 	}
@@ -27,8 +31,7 @@ impl LanguageToolRemote {
 
 impl LanguageTool for LanguageToolRemote {
 	fn allow_words(&mut self, words: &[String]) -> anyhow::Result<()> {
-		let _ = words;
-		eprintln!("Allow Words not supported for Remote LanguageTool");
+		self.allowed_words = Some(words.iter().map(|x| x.clone()).collect());
 		Ok(())
 	}
 
@@ -60,6 +63,18 @@ impl LanguageTool for LanguageToolRemote {
 
 		let mut suggestions = Vec::with_capacity(response.matches.len());
 		for m in response.matches {
+			if let Some(allowed) = &self.allowed_words {
+				if m.context.length == 0 {
+					continue;
+				}
+				let mut iter = m.context.text.char_indices();
+				let (start, _) = iter.nth(m.context.offset).unwrap();
+				let (end, _) = iter.nth(m.context.length - 1).unwrap();
+				let text = &m.context.text[start..end];
+				if allowed.contains(text) {
+					continue;
+				}
+			}
 			let suggestion = Suggestion {
 				start: text_builder.mapper.source(m.offset),
 				end: text_builder.mapper.source(m.offset + m.length),
