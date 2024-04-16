@@ -1,0 +1,6 @@
+{
+    "rust-analyzer.cargo.features": [
+        "extern-jar",
+        "remote-server",
+    ]
+}

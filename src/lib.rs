@@ -1,15 +1,11 @@
-mod convert;
+pub mod convert;
 mod rules;
 
 #[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
-mod jni;
-#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
-pub use jni::LanguageToolJNI;
+pub mod jni;
 
 #[cfg(feature = "remote-server")]
-mod remote;
-#[cfg(feature = "remote-server")]
-pub use remote::LanguageToolRemote;
+pub mod remote;
 
 pub use rules::Rules;
 
@@ -28,22 +24,29 @@ pub fn new_languagetool(
 	#[allow(unused)] language: &str,
 ) -> anyhow::Result<Box<dyn LanguageTool>> {
 	let lt = match (bundled, jar_location, host, port) {
+		#[cfg(feature = "remote-server")]
+		(false, None, Some(host), Some(port)) => {
+			Box::new(remote::LanguageToolRemote::new(host, port, language)?)
+				as Box<dyn LanguageTool>
+		},
+		#[cfg(not(feature = "remote-server"))]
+		(false, None, Some(_), Some(_)) => Err(anyhow::anyhow!("Feature 'remote-server' is disabled."))?,
+
 		#[cfg(feature = "bundle-jar")]
-		(true, None, None, None) => Box::new(LanguageToolJNI::new_bundled(language)?),
+		(true, None, None, None) => {
+			Box::new(jni::LanguageToolJNI::new_bundled(language)?) as Box<dyn LanguageTool>
+		},
 		#[cfg(not(feature = "bundle-jar"))]
 		(true, None, None, None) => Err(anyhow::anyhow!("Feature 'bundle-jar' is disabled."))?,
 
 		#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
-		(false, Some(path), None, None) => Box::new(LanguageToolJNI::new(path, language)?),
+		(false, Some(path), None, None) => {
+			Box::new(jni::LanguageToolJNI::new(path, language)?) as Box<dyn LanguageTool>
+		},
 		#[cfg(all(not(feature = "bundle-jar"), not(feature = "extern-jar")))]
 		(false, Some(_), None, None) => Err(anyhow::anyhow!(
 			"Features 'bundle-jar' and 'extern-jar' are disabled."
 		))?,
-
-		#[cfg(feature = "remote-server")]
-		(false, None, Some(host), Some(port)) => Box::new(LanguageToolRemote::new(host, port, language)?),
-		#[cfg(not(feature = "remote-server"))]
-		(false, None, Some(_), Some(_)) => Err(anyhow::anyhow!("Feature 'remote-server' is disabled."))?,
 
 		_ => Err(anyhow::anyhow!(
 			"Exactly one of 'bundled', 'jar_location' or 'host and port' must be specified."
@@ -62,6 +65,7 @@ pub struct Suggestion {
 	pub rule_id: String,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub struct Position {
 	pub utf_8: usize,
 	pub line: usize,
