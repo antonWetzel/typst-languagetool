@@ -1,12 +1,8 @@
+mod backends;
 pub mod convert;
 mod rules;
 
-#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
-pub mod jni;
-
-#[cfg(feature = "remote-server")]
-pub mod remote;
-
+pub use backends::*;
 pub use rules::Rules;
 
 pub trait LanguageTool {

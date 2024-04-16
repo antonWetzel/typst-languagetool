@@ -61,8 +61,8 @@ impl LanguageTool for LanguageToolRemote {
 		let mut suggestions = Vec::with_capacity(response.matches.len());
 		for m in response.matches {
 			let suggestion = Suggestion {
-				start: text_builder.map[m.offset],
-				end: text_builder.map[m.offset + m.length],
+				start: text_builder.mapper.source(m.offset),
+				end: text_builder.mapper.source(m.offset + m.length),
 				message: m.message,
 				rule_description: m.rule.description,
 				rule_id: m.rule.id,
@@ -75,19 +75,97 @@ impl LanguageTool for LanguageToolRemote {
 	}
 }
 
-pub struct TextBuilderRemote {
+struct Mapper {
+	blocks: Vec<Block>,
+	lt_position: usize,
+	source_position: usize,
+	block_index: usize,
+}
+
+impl Mapper {
+	fn source(&mut self, pos: usize) -> usize {
+		while pos < self.lt_position {
+			self.block_index -= 1;
+			match self.blocks[self.block_index] {
+				Block::Text(s) => {
+					self.lt_position -= s;
+					self.source_position -= s;
+				},
+				Block::Markup(s) => {
+					self.source_position -= s;
+				},
+				Block::Encoded { text, markup } => {
+					self.lt_position -= text;
+					self.source_position -= markup;
+				},
+			}
+		}
+
+		loop {
+			let diff = pos - self.lt_position;
+			match self.blocks[self.block_index] {
+				Block::Text(s) => {
+					if diff < s {
+						return self.source_position + diff;
+					}
+					self.block_index += 1;
+					self.lt_position += s;
+					self.source_position += s;
+				},
+				Block::Markup(s) => {
+					self.block_index += 1;
+					self.source_position += s;
+				},
+				Block::Encoded { text, markup } => {
+					if diff < text {
+						return self.source_position + diff;
+					}
+					self.block_index += 1;
+					self.lt_position += text;
+					self.source_position += markup;
+				},
+			}
+		}
+	}
+
+	fn add_block(&mut self, block: Block) {
+		match (self.blocks.last_mut(), block) {
+			(Some(Block::Text(old_s)), Block::Text(s)) => *old_s += s,
+			(Some(Block::Markup(old_s)), Block::Markup(s)) => *old_s += s,
+			(
+				Some(Block::Encoded { text: old_text, markup: old_markup }),
+				Block::Encoded { text, markup },
+			) => {
+				*old_text += text;
+				*old_markup += markup
+			},
+			_ => self.blocks.push(block),
+		}
+	}
+}
+
+#[derive(Debug, Clone, Copy)]
+enum Block {
+	Text(usize),
+	Markup(usize),
+	Encoded { text: usize, markup: usize },
+}
+
+struct TextBuilderRemote {
 	converted: String,
-	// todo: don't save position for every char
-	map: Vec<usize>,
-	position: usize,
+	mapper: Mapper,
 }
 
 impl TextBuilderRemote {
 	pub fn new() -> Self {
 		Self {
 			converted: String::new(),
-			map: Vec::new(),
-			position: 0,
+			mapper: Mapper {
+				blocks: Vec::new(),
+				lt_position: 0,
+				source_position: 0,
+				block_index: 0,
+			},
 		}
 	}
 }
@@ -95,24 +173,21 @@ impl TextBuilderRemote {
 impl TextBuilder for TextBuilderRemote {
 	fn add_text(&mut self, text: &str) -> anyhow::Result<()> {
 		self.converted += text;
-		for _ in text.chars() {
-			self.map.push(self.position);
-			self.position += 1;
-		}
+		self.mapper.add_block(Block::Text(text.chars().count()));
 		Ok(())
 	}
 
 	fn add_markup(&mut self, markup: &str) -> anyhow::Result<()> {
-		self.position += markup.chars().count();
+		self.mapper.add_block(Block::Markup(markup.chars().count()));
 		Ok(())
 	}
 
 	fn add_encoded(&mut self, markup: &str, text: &str) -> anyhow::Result<()> {
 		self.converted += text;
-		for _ in text.chars() {
-			self.map.push(self.position);
-		}
-		self.position += markup.chars().count();
+		self.mapper.add_block(Block::Encoded {
+			text: text.chars().count(),
+			markup: markup.chars().count(),
+		});
 		Ok(())
 	}
 }
