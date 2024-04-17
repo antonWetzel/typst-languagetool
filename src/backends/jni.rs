@@ -7,7 +7,7 @@ use jni::{
 
 use crate::{
 	convert::{convert, TextBuilder},
-	LanguageTool, Rules, Suggestion,
+	LanguageToolBackend, Rules, Suggestion,
 };
 
 pub struct LanguageToolJNI {
@@ -136,13 +136,13 @@ impl LanguageToolJNI {
 	}
 }
 
-impl LanguageTool for LanguageToolJNI {
-	fn change_language(&mut self, lang: &str) -> anyhow::Result<()> {
+impl LanguageToolBackend for LanguageToolJNI {
+	async fn change_language(&mut self, lang: &str) -> anyhow::Result<()> {
 		self.lang_tool = Self::create_lang_tool(lang, &self.jvm)?;
 		Ok(())
 	}
 
-	fn check_source(&self, text: &str, rules: &Rules) -> anyhow::Result<Vec<Suggestion>> {
+	async fn check_source(&self, text: &str, rules: &Rules) -> anyhow::Result<Vec<Suggestion>> {
 		let root = typst::syntax::parse(text);
 		let mut guard = self.jvm.attach_current_thread()?;
 		let mut text_builder = TextBuilderJNI::new(&mut guard)?;
@@ -152,7 +152,7 @@ impl LanguageTool for LanguageToolJNI {
 		Ok(suggestions)
 	}
 
-	fn allow_words(&mut self, words: &[String]) -> anyhow::Result<()> {
+	async fn allow_words(&mut self, words: &[String]) -> anyhow::Result<()> {
 		let mut guard = self.jvm.attach_current_thread()?;
 		let rules = guard
 			.call_method(
@@ -191,7 +191,7 @@ impl LanguageTool for LanguageToolJNI {
 		Ok(())
 	}
 
-	fn disable_checks(&mut self, checks: &[String]) -> anyhow::Result<()> {
+	async fn disable_checks(&mut self, checks: &[String]) -> anyhow::Result<()> {
 		let mut guard = self.jvm.attach_current_thread()?;
 		let args = guard.new_object("java/util/ArrayList", "()V", &[])?;
 		let args = guard.get_list(&args)?;

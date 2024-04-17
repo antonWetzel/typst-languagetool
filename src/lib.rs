@@ -5,50 +5,89 @@ mod rules;
 pub use backends::*;
 pub use rules::Rules;
 
-pub trait LanguageTool {
-	fn change_language(&mut self, lang: &str) -> anyhow::Result<()>;
-	fn allow_words(&mut self, words: &[String]) -> anyhow::Result<()>;
-	fn disable_checks(&mut self, checks: &[String]) -> anyhow::Result<()>;
-	fn check_source(&self, text: &str, rules: &Rules) -> anyhow::Result<Vec<Suggestion>>;
+#[allow(async_fn_in_trait)]
+pub trait LanguageToolBackend {
+	async fn change_language(&mut self, lang: &str) -> anyhow::Result<()>;
+	async fn allow_words(&mut self, words: &[String]) -> anyhow::Result<()>;
+	async fn disable_checks(&mut self, checks: &[String]) -> anyhow::Result<()>;
+	async fn check_source(&self, text: &str, rules: &Rules) -> anyhow::Result<Vec<Suggestion>>;
 }
 
-pub fn new_languagetool(
-	bundled: bool,
-	jar_location: Option<&String>,
-	host: Option<&String>,
-	port: Option<&String>,
-	#[allow(unused)] language: &str,
-) -> anyhow::Result<Box<dyn LanguageTool>> {
-	let lt = match (bundled, jar_location, host, port) {
-		#[cfg(feature = "remote-server")]
-		(false, None, Some(host), Some(port)) => {
-			Box::new(remote::LanguageToolRemote::new(host, port, language)?)
-				as Box<dyn LanguageTool>
-		},
-		#[cfg(not(feature = "remote-server"))]
-		(false, None, Some(_), Some(_)) => Err(anyhow::anyhow!("Feature 'remote-server' is disabled."))?,
+pub enum LanguageTool {
+	#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
+	JNI(jni::LanguageToolJNI),
+	#[cfg(feature = "remote-server")]
+	Remote(remote::LanguageToolRemote),
+}
 
-		#[cfg(feature = "bundle-jar")]
-		(true, None, None, None) => {
-			Box::new(jni::LanguageToolJNI::new_bundled(language)?) as Box<dyn LanguageTool>
-		},
-		#[cfg(not(feature = "bundle-jar"))]
-		(true, None, None, None) => Err(anyhow::anyhow!("Feature 'bundle-jar' is disabled."))?,
+impl LanguageTool {
+	pub fn new(
+		bundled: bool,
+		jar_location: Option<&String>,
+		host: Option<&String>,
+		port: Option<&String>,
+		#[allow(unused)] language: &str,
+	) -> anyhow::Result<Self> {
+		let lt = match (bundled, jar_location, host, port) {
+			#[cfg(feature = "remote-server")]
+			(false, None, Some(host), Some(port)) => {
+				Self::Remote(remote::LanguageToolRemote::new(host, port, language)?)
+			},
+			#[cfg(not(feature = "remote-server"))]
+			(false, None, Some(_), Some(_)) => Err(anyhow::anyhow!("Feature 'remote-server' is disabled."))?,
 
-		#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
-		(false, Some(path), None, None) => {
-			Box::new(jni::LanguageToolJNI::new(path, language)?) as Box<dyn LanguageTool>
-		},
-		#[cfg(all(not(feature = "bundle-jar"), not(feature = "extern-jar")))]
-		(false, Some(_), None, None) => Err(anyhow::anyhow!(
-			"Features 'bundle-jar' and 'extern-jar' are disabled."
-		))?,
+			#[cfg(feature = "bundle-jar")]
+			(true, None, None, None) => Self::JNI(jni::LanguageToolJNI::new_bundled(language)?),
 
-		_ => Err(anyhow::anyhow!(
-			"Exactly one of 'bundled', 'jar_location' or 'host and port' must be specified."
-		))?,
-	};
-	Ok(lt)
+			#[cfg(not(feature = "bundle-jar"))]
+			(true, None, None, None) => Err(anyhow::anyhow!("Feature 'bundle-jar' is disabled."))?,
+
+			#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
+			(false, Some(path), None, None) => Self::JNI(jni::LanguageToolJNI::new(path, language)?),
+			#[cfg(all(not(feature = "bundle-jar"), not(feature = "extern-jar")))]
+			(false, Some(_), None, None) => Err(anyhow::anyhow!(
+				"Features 'bundle-jar' and 'extern-jar' are disabled."
+			))?,
+
+			_ => Err(anyhow::anyhow!(
+				"Exactly one of 'bundled', 'jar_location' or 'host and port' must be specified."
+			))?,
+		};
+		Ok(lt)
+	}
+
+	pub async fn change_language(&mut self, lang: &str) -> anyhow::Result<()> {
+		match self {
+			#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
+			Self::JNI(lt) => lt.change_language(lang).await,
+			#[cfg(feature = "remote-server")]
+			Self::Remote(lt) => lt.change_language(lang).await,
+		}
+	}
+	pub async fn allow_words(&mut self, words: &[String]) -> anyhow::Result<()> {
+		match self {
+			#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
+			Self::JNI(lt) => lt.allow_words(words).await,
+			#[cfg(feature = "remote-server")]
+			Self::Remote(lt) => lt.allow_words(words).await,
+		}
+	}
+	pub async fn disable_checks(&mut self, checks: &[String]) -> anyhow::Result<()> {
+		match self {
+			#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
+			Self::JNI(lt) => lt.disable_checks(checks).await,
+			#[cfg(feature = "remote-server")]
+			Self::Remote(lt) => lt.disable_checks(checks).await,
+		}
+	}
+	pub async fn check_source(&self, text: &str, rules: &Rules) -> anyhow::Result<Vec<Suggestion>> {
+		match self {
+			#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
+			Self::JNI(lt) => lt.check_source(text, rules).await,
+			#[cfg(feature = "remote-server")]
+			Self::Remote(lt) => lt.check_source(text, rules).await,
+		}
+	}
 }
 
 #[derive(Debug, Clone)]

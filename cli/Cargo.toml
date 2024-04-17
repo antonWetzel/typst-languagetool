@@ -25,3 +25,4 @@ clap.workspace = true
 annotate-snippets.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
+tokio.workspace = true

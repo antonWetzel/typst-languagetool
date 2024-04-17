@@ -68,10 +68,11 @@ struct Args {
 	port: Option<String>,
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
 	let args = Args::parse();
 
-	let mut lt = typst_languagetool::new_languagetool(
+	let mut lt = LanguageTool::new(
 		args.bundled,
 		args.jar_location.as_ref(),
 		args.host.as_ref(),
@@ -85,24 +86,24 @@ fn main() -> anyhow::Result<()> {
 			.lines()
 			.map(|line| String::from(line))
 			.collect::<Vec<_>>();
-		lt.allow_words(&words)?;
+		lt.allow_words(&words).await?;
 	}
-	lt.disable_checks(&args.disabled_checks)?;
+	lt.disable_checks(&args.disabled_checks).await?;
 
 	match args.task {
-		Task::Check => check(args, lt.as_mut())?,
-		Task::Watch => watch(args, lt.as_mut())?,
+		Task::Check => check(args, &mut lt).await?,
+		Task::Watch => watch(args, &mut lt).await?,
 	}
 
 	Ok(())
 }
 
-fn check(args: Args, lt: &mut dyn LanguageTool) -> anyhow::Result<()> {
-	handle_file(&args.path, lt, &args)?;
+async fn check(args: Args, lt: &mut LanguageTool) -> anyhow::Result<()> {
+	handle_file(&args.path, lt, &args).await?;
 	Ok(())
 }
 
-fn watch(args: Args, lt: &mut dyn LanguageTool) -> anyhow::Result<()> {
+async fn watch(args: Args, lt: &mut LanguageTool) -> anyhow::Result<()> {
 	let (tx, rx) = std::sync::mpsc::channel();
 	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), tx)?;
 	watcher
@@ -115,13 +116,13 @@ fn watch(args: Args, lt: &mut dyn LanguageTool) -> anyhow::Result<()> {
 				Some(ext) if ext == "typ" => {},
 				_ => continue,
 			}
-			handle_file(&event.path, lt, &args)?;
+			handle_file(&event.path, lt, &args).await?;
 		}
 	}
 	Ok(())
 }
 
-fn handle_file(path: &Path, lt: &dyn LanguageTool, args: &Args) -> anyhow::Result<()> {
+async fn handle_file(path: &Path, lt: &LanguageTool, args: &Args) -> anyhow::Result<()> {
 	let mut text = std::fs::read_to_string(path)?;
 	if !args.plain {
 		// annotate snippet uses 1 step for tab, while the terminal uses more
@@ -140,7 +141,7 @@ fn handle_file(path: &Path, lt: &dyn LanguageTool, args: &Args) -> anyhow::Resul
 		println!("START");
 	}
 	let mut position = TextWithPosition::new(&text);
-	let suggestions = lt.check_source(&text, &rules)?;
+	let suggestions = lt.check_source(&text, &rules).await?;
 	for suggestion in suggestions {
 		if args.plain {
 			output_plain(path, &mut position, suggestion);

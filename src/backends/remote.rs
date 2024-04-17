@@ -1,11 +1,10 @@
 use std::collections::HashSet;
 
 use languagetool_rust::{CheckRequest, ServerClient};
-use tokio::runtime::Runtime;
 
 use crate::{
 	convert::{convert, TextBuilder},
-	LanguageTool, Suggestion,
+	LanguageToolBackend, Suggestion,
 };
 
 pub struct LanguageToolRemote {
@@ -13,7 +12,6 @@ pub struct LanguageToolRemote {
 	server_client: ServerClient,
 	disabled_categories: Option<Vec<String>>,
 	allowed_words: Option<HashSet<String>>,
-	runtime: Runtime,
 }
 
 impl LanguageToolRemote {
@@ -24,28 +22,27 @@ impl LanguageToolRemote {
 			lang: lang.into(),
 			disabled_categories: None,
 			allowed_words: None,
-			runtime: Runtime::new()?,
 		})
 	}
 }
 
-impl LanguageTool for LanguageToolRemote {
-	fn allow_words(&mut self, words: &[String]) -> anyhow::Result<()> {
+impl LanguageToolBackend for LanguageToolRemote {
+	async fn allow_words(&mut self, words: &[String]) -> anyhow::Result<()> {
 		self.allowed_words = Some(words.iter().map(|x| x.clone()).collect());
 		Ok(())
 	}
 
-	fn change_language(&mut self, lang: &str) -> anyhow::Result<()> {
+	async fn change_language(&mut self, lang: &str) -> anyhow::Result<()> {
 		self.lang = lang.into();
 		Ok(())
 	}
 
-	fn disable_checks(&mut self, checks: &[String]) -> anyhow::Result<()> {
+	async fn disable_checks(&mut self, checks: &[String]) -> anyhow::Result<()> {
 		self.disabled_categories = Some(checks.iter().map(|x| x.clone()).collect());
 		Ok(())
 	}
 
-	fn check_source(
+	async fn check_source(
 		&self,
 		text: &str,
 		rules: &crate::Rules,
@@ -59,7 +56,7 @@ impl LanguageTool for LanguageToolRemote {
 			.with_language(self.lang.clone());
 		req.disabled_rules = self.disabled_categories.clone();
 
-		let response = self.runtime.block_on(self.server_client.check(&req))?;
+		let response = self.server_client.check(&req).await?;
 
 		let mut suggestions = Vec::with_capacity(response.matches.len());
 		for m in response.matches {

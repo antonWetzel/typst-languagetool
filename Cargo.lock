@@ -357,6 +357,7 @@ dependencies = [
  "notify",
  "notify-debouncer-mini",
  "serde_json",
+ "tokio",
  "typst-languagetool",
 ]
 
@@ -1378,6 +1379,7 @@ dependencies = [
  "serde",
  "serde_ignored",
  "serde_json",
+ "tokio",
  "typst-languagetool",
 ]
 
@@ -2712,7 +2714,6 @@ dependencies = [
  "jni",
  "languagetool-rust",
  "serde",
- "tokio",
  "typst",
 ]
 

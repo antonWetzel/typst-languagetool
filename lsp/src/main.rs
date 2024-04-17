@@ -13,7 +13,8 @@ use lsp_types::{InitializeParams, ServerCapabilities};
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use typst_languagetool::{LanguageTool, Rules, TextWithPosition};
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
 	eprintln!("starting LSP server");
 
 	let (connection, io_threads) = Connection::stdio();
@@ -41,7 +42,7 @@ fn main() -> anyhow::Result<()> {
 			return Err(e.into());
 		},
 	};
-	main_loop(connection, initialization_params)?;
+	main_loop(connection, initialization_params).await?;
 	io_threads.join()?;
 
 	eprintln!("shutting down server");
@@ -77,16 +78,16 @@ impl Default for Options {
 }
 
 impl Options {
-	fn create_lt(&self) -> anyhow::Result<Box<dyn LanguageTool>> {
-		let mut lt = typst_languagetool::new_languagetool(
+	async fn create_lt(&self) -> anyhow::Result<LanguageTool> {
+		let mut lt = LanguageTool::new(
 			self.bundled,
 			self.jar_location.as_ref(),
 			self.host.as_ref(),
 			self.port.as_ref(),
 			&self.language,
 		)?;
-		lt.allow_words(&self.dictionary)?;
-		lt.disable_checks(&self.disabled_checks)?;
+		lt.allow_words(&self.dictionary).await?;
+		lt.disable_checks(&self.disabled_checks).await?;
 		Ok(lt)
 	}
 }
@@ -100,7 +101,7 @@ impl Drop for ServerProcess {
 	}
 }
 
-fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Result<()> {
+async fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Result<()> {
 	let mut options = (|| {
 		let params = serde_json::from_value::<InitializeParams>(params).ok()?;
 		let options = params.initialization_options?;
@@ -113,7 +114,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Resul
 	})()
 	.unwrap_or(Options::default());
 
-	let mut lt = options.create_lt()?;
+	let mut lt = options.create_lt().await?;
 
 	for msg in &connection.receiver {
 		match msg {
@@ -189,7 +190,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Resul
 					Ok(params) => {
 						let content = params.text.unwrap();
 
-						let diagnostics = get_diagnostics(&content, lt.as_mut(), &options)?;
+						let diagnostics = get_diagnostics(&content, &lt, &options).await?;
 
 						let params = PublishDiagnosticsParams {
 							uri: params.text_document.uri,
@@ -206,7 +207,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Resul
 					Ok(params) => {
 						let content = params.text_document.text;
 
-						let diagnostics = get_diagnostics(&content, lt.as_mut(), &options)?;
+						let diagnostics = get_diagnostics(&content, &lt, &options).await?;
 
 						let params = PublishDiagnosticsParams {
 							uri: params.text_document.uri,
@@ -225,7 +226,7 @@ fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Resul
 							serde_ignored::deserialize::<_, _, Options>(params.settings, |path| {
 								eprintln!("unknown option: {}", path);
 							})?;
-						lt = options.create_lt()?;
+						lt = options.create_lt().await?;
 						continue;
 					},
 					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
@@ -283,15 +284,16 @@ where
 	Ok(())
 }
 
-fn get_diagnostics(
+async fn get_diagnostics(
 	text: &str,
-	lt: &dyn LanguageTool,
+	lt: &LanguageTool,
 	options: &Options,
 ) -> anyhow::Result<Vec<Diagnostic>> {
 	let mut position = TextWithPosition::new(&text);
 
 	let diagnostics = lt
-		.check_source(text, &options.rules)?
+		.check_source(text, &options.rules)
+		.await?
 		.into_iter()
 		.map(|suggestion| {
 			let start = position.get_position(suggestion.start, false);
