@@ -184,15 +184,15 @@ impl LanguageServer for Backend {
 				.iter()
 				.find_map(|change| change.range)
 				.unwrap()
-				.end
+				.start
 				.line as usize;
 
 			let mut start = line;
-			while start > 0 && source.line(start).is_empty().not() {
+			while start > 0 && source.line(start).trim().is_empty().not() {
 				start -= 1;
 			}
 			let mut end = line;
-			while source.line(end).is_empty().not() {
+			while source.line(end).trim().is_empty().not() {
 				end += 1;
 			}
 			let mut content = String::new();
