@@ -1,52 +1,321 @@
-use lsp_types::notification::{
-	Cancel, DidChangeConfiguration, DidOpenTextDocument, DidSaveTextDocument, PublishDiagnostics,
-	SetTrace,
-};
-use lsp_types::request::CodeActionRequest;
-use lsp_types::{
-	CodeAction, CodeActionKind, CodeActionProviderCapability, CodeActionResponse, Diagnostic,
-	DiagnosticSeverity, NumberOrString, PublishDiagnosticsParams, Range, SaveOptions,
-	TextDocumentSyncOptions, TextDocumentSyncSaveOptions, TextEdit, WorkspaceEdit,
-};
-use lsp_types::{InitializeParams, ServerCapabilities};
+use std::collections::HashMap;
+use std::fmt::Display;
+use std::ops::Not;
 
-use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use typst_languagetool::{LanguageTool, Rules, TextWithPosition};
+
+use tokio::sync::RwLock;
+use tower_lsp::jsonrpc::{self, Result};
+use tower_lsp::lsp_types::notification::*;
+use tower_lsp::lsp_types::*;
+use tower_lsp::{Client, LanguageServer, LspService, Server};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-	eprintln!("starting LSP server");
+	let stdin = tokio::io::stdin();
+	let stdout = tokio::io::stdout();
 
-	let (connection, io_threads) = Connection::stdio();
+	let (service, socket) = LspService::new(|client| Backend {
+		client,
+		state: RwLock::new(State::Started),
+	});
 
-	let server_capabilities = serde_json::to_value(&ServerCapabilities {
-		text_document_sync: Some(lsp_types::TextDocumentSyncCapability::Options(
-			TextDocumentSyncOptions {
-				open_close: Some(true),
-				save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
-					include_text: Some(true),
-				})),
-				..Default::default()
-			},
-		)),
-		code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
-		..Default::default()
-	})
-	.unwrap();
-	let initialization_params = match connection.initialize(server_capabilities) {
-		Ok(it) => it,
-		Err(e) => {
-			if e.channel_is_disconnected() {
-				io_threads.join()?;
-			}
-			return Err(e.into());
-		},
-	};
-	main_loop(connection, initialization_params).await?;
-	io_threads.join()?;
-
-	eprintln!("shutting down server");
+	Server::new(stdin, stdout, socket).serve(service).await;
 	Ok(())
+}
+
+#[derive(Debug)]
+struct Backend {
+	client: Client,
+	state: RwLock<State>,
+}
+
+#[derive(Debug)]
+enum State {
+	Started,
+	Running {
+		lt: LanguageTool,
+		options: Options,
+		sources: HashMap<Url, Source>,
+	},
+}
+
+fn map_err(err: impl Into<anyhow::Error>) -> jsonrpc::Error {
+	jsonrpc::Error {
+		code: jsonrpc::ErrorCode::InternalError,
+		message: format!("{}", err.into()).into(),
+		data: None,
+	}
+}
+
+impl Backend {
+	async fn error(&self, err: impl Display) {
+		self.client.log_message(MessageType::ERROR, err).await;
+	}
+}
+
+#[tower_lsp::async_trait]
+impl LanguageServer for Backend {
+	async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
+		let options = (|| {
+			let options = params.initialization_options?;
+			let options = serde_ignored::deserialize(options, |path| {
+				eprintln!("unknown option: {}", path);
+			})
+			.ok()?;
+			Some(options)
+		})()
+		.unwrap_or(Options::default());
+
+		let capabilities = ServerCapabilities {
+			text_document_sync: Some(TextDocumentSyncCapability::Options(
+				TextDocumentSyncOptions {
+					open_close: Some(true),
+					save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
+						include_text: Some(false),
+					})),
+					change: Some(TextDocumentSyncKind::INCREMENTAL),
+					..Default::default()
+				},
+			)),
+
+			code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+			..Default::default()
+		};
+
+		let lt = options.create_lt().await.map_err(map_err)?;
+		let mut state = self.state.write().await;
+		*state = State::Running { lt, options, sources: HashMap::new() };
+
+		Ok(InitializeResult { server_info: None, capabilities })
+	}
+
+	async fn initialized(&self, _: InitializedParams) {
+		self.client
+			.log_message(MessageType::INFO, "server initialized!")
+			.await;
+	}
+
+	async fn did_open(&self, params: DidOpenTextDocumentParams) {
+		let source = Source::new(&params.text_document.text);
+		let mut state = self.state.write().await;
+		let State::Running { sources, .. } = &mut *state else {
+			return self.error("invalid state in 'did_open'").await;
+		};
+		sources.insert(params.text_document.uri, source);
+	}
+
+	async fn did_close(&self, params: DidCloseTextDocumentParams) {
+		let mut state = self.state.write().await;
+		let State::Running { sources, .. } = &mut *state else {
+			return self.error("invalid state in 'did_close'").await;
+		};
+		sources.remove(&params.text_document.uri);
+	}
+
+	async fn did_save(&self, params: DidSaveTextDocumentParams) {
+		self.client
+			.log_message(
+				MessageType::INFO,
+				format!("Checking: {:#?}", params.text_document.uri.path()),
+			)
+			.await;
+
+		let diagnostics = {
+			let state = self.state.read().await;
+
+			let State::Running { lt, options, sources, .. } = &*state else {
+				return self.error("invalid state in 'did_save'").await;
+			};
+
+			let content = sources.get(&params.text_document.uri).unwrap().text();
+
+			match get_diagnostics(&content, &lt, &options, 0).await {
+				Ok(d) => d,
+				Err(err) => return self.error(err).await,
+			}
+		};
+
+		let params = PublishDiagnosticsParams {
+			uri: params.text_document.uri,
+			version: None,
+			diagnostics,
+		};
+		self.client
+			.send_notification::<PublishDiagnostics>(params)
+			.await;
+	}
+
+	async fn did_change(&self, params: DidChangeTextDocumentParams) {
+		let on_change = {
+			let mut state = self.state.write().await;
+			let State::Running { sources, options, .. } = &mut *state else {
+				return self.error("invalid state in 'did_change'").await;
+			};
+			let source = sources.get_mut(&params.text_document.uri).unwrap();
+			for change in &params.content_changes {
+				if let Some(range) = change.range {
+					source.edit(range, &change.text);
+				}
+			}
+			options.on_change
+		};
+
+		if on_change.not() {
+			return;
+		}
+		let update = params.content_changes.iter().any(|change| {
+			change.text.is_empty() || change.text.chars().any(|c| c.is_alphanumeric().not())
+		});
+
+		if update.not() {
+			return;
+		}
+
+		let (start, end, diagnostics) = {
+			let state = self.state.read().await;
+			let State::Running { lt, options, sources, .. } = &*state else {
+				return self.error("invalid state in 'did_change'").await;
+			};
+
+			let source = sources.get(&params.text_document.uri).unwrap();
+			let line = params
+				.content_changes
+				.iter()
+				.find_map(|change| change.range)
+				.unwrap()
+				.end
+				.line as usize;
+
+			let mut start = line;
+			while start > 0 && source.line(start).is_empty().not() {
+				start -= 1;
+			}
+			let mut end = line;
+			while source.line(end).is_empty().not() {
+				end += 1;
+			}
+			let mut content = String::new();
+			for i in start..end {
+				content += source.line(i);
+				content += "\n";
+			}
+
+			let diagnostics = match get_diagnostics(&content, lt, options, start).await {
+				Ok(d) => d,
+				Err(err) => return self.error(err).await,
+			};
+
+			(start, end, diagnostics)
+		};
+
+		self.client
+			.log_message(
+				MessageType::INFO,
+				format!(
+					"Checking: {:#?} ({}-{})",
+					params.text_document.uri.path(),
+					start + 1,
+					end + 1,
+				),
+			)
+			.await;
+
+		let params = PublishDiagnosticsParams {
+			uri: params.text_document.uri,
+			version: None,
+			diagnostics,
+		};
+		self.client
+			.send_notification::<PublishDiagnostics>(params)
+			.await;
+	}
+
+	async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
+		let mut unknown_options = String::new();
+		let options = match serde_ignored::deserialize::<_, _, Options>(params.settings, |path| {
+			unknown_options += format!("{} ", path).as_str();
+		}) {
+			Ok(o) => o,
+			Err(err) => return self.error(err).await,
+		};
+		if unknown_options.is_empty().not() {
+			self.client
+				.log_message(
+					MessageType::WARNING,
+					format!("Unknown Options: {}", unknown_options),
+				)
+				.await
+		}
+
+		let lt = match options.create_lt().await {
+			Ok(lt) => lt,
+			Err(err) => return self.error(err).await,
+		};
+		self.client
+			.log_message(
+				MessageType::INFO,
+				format!("Updating Options: {:#?}", options),
+			)
+			.await;
+		let mut state = self.state.write().await;
+		match &mut *state {
+			State::Running { lt: old_lt, options: old_options, .. } => {
+				*old_lt = lt;
+				*old_options = options;
+			},
+			_ => unreachable!(),
+		}
+	}
+
+	async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
+		let mut action = CodeActionResponse::new();
+
+		let Some(diagnostic) = params.context.diagnostics.last() else {
+			return Ok(None);
+		};
+		let Some(data) = &diagnostic.data else {
+			return Ok(None);
+		};
+
+		let replacements = match serde_json::from_value::<Vec<String>>(data.clone()) {
+			Ok(r) => r,
+			Err(err) => {
+				self.error(err).await;
+				return Ok(None);
+			},
+		};
+
+		for (i, value) in replacements.into_iter().enumerate() {
+			let title = format!("Replace with \"{}\"", value);
+			let replace = TextEdit { range: diagnostic.range, new_text: value };
+			let edit = [(params.text_document.uri.clone(), vec![replace])]
+				.into_iter()
+				.collect();
+
+			action.push(
+				CodeAction {
+					title,
+					is_preferred: Some(i == 0),
+					kind: Some(CodeActionKind::QUICKFIX),
+					diagnostics: Some(params.context.diagnostics.clone()),
+					edit: Some(WorkspaceEdit {
+						changes: Some(edit),
+						..Default::default()
+					}),
+					command: None,
+					disabled: None,
+					data: None,
+				}
+				.into(),
+			);
+		}
+		Ok(Some(action))
+	}
+
+	async fn shutdown(&self) -> Result<()> {
+		Ok(())
+	}
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -60,6 +329,7 @@ struct Options {
 	jar_location: Option<String>,
 	host: Option<String>,
 	port: Option<String>,
+	on_change: bool,
 }
 
 impl Default for Options {
@@ -73,6 +343,7 @@ impl Default for Options {
 			jar_location: None,
 			host: None,
 			port: None,
+			on_change: false,
 		}
 	}
 }
@@ -92,204 +363,13 @@ impl Options {
 	}
 }
 
-struct ServerProcess(std::process::Child);
-
-impl Drop for ServerProcess {
-	fn drop(&mut self) {
-		self.0.kill().unwrap();
-		eprintln!("Language tool process should close, but it likes to stay open");
-	}
-}
-
-async fn main_loop(connection: Connection, params: serde_json::Value) -> anyhow::Result<()> {
-	let mut options = (|| {
-		let params = serde_json::from_value::<InitializeParams>(params).ok()?;
-		let options = params.initialization_options?;
-
-		let options = serde_ignored::deserialize(options, |path| {
-			eprintln!("unknown option: {}", path);
-		})
-		.ok()?;
-		Some(options)
-	})()
-	.unwrap_or(Options::default());
-
-	let mut lt = options.create_lt().await?;
-
-	for msg in &connection.receiver {
-		match msg {
-			Message::Request(req) => {
-				if connection.handle_shutdown(&req)? {
-					return Ok(());
-				}
-				let req = match cast_request::<CodeActionRequest>(req) {
-					Ok((id, mut params)) => {
-						let mut action = CodeActionResponse::new();
-
-						let (replacements, diagnostics) = (|| {
-							let diagnostic = params.context.diagnostics.pop()?;
-							let replacements =
-								serde_json::from_value::<Vec<String>>(diagnostic.data.clone()?)
-									.ok()?;
-							Some((replacements, Some(vec![diagnostic])))
-						})()
-						.unwrap_or((Vec::new(), None));
-
-						for value in replacements {
-							let title = format!("Replace with \"{}\"", value);
-							let replace = TextEdit { range: params.range, new_text: value };
-							let edit = [(params.text_document.uri.clone(), vec![replace])]
-								.into_iter()
-								.collect();
-
-							action.push(
-								CodeAction {
-									title,
-									is_preferred: Some(true),
-									kind: Some(CodeActionKind::QUICKFIX),
-									diagnostics: diagnostics.clone(),
-									edit: Some(WorkspaceEdit {
-										changes: Some(edit),
-										..Default::default()
-									}),
-
-									..Default::default()
-								}
-								.into(),
-							);
-						}
-						send_response::<CodeActionRequest>(&connection, id, Some(action))?;
-						continue;
-					},
-					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-					Err(ExtractError::MethodMismatch(req)) => req,
-				};
-				eprintln!("unknown request: {:?}", req);
-			},
-			Message::Response(resp) => {
-				eprintln!("unknown response: {:?}", resp);
-			},
-			Message::Notification(not) => {
-				let not = match cast_notification::<Cancel>(not) {
-					Ok(_params) => {
-						continue;
-					},
-					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-					Err(ExtractError::MethodMismatch(not)) => not,
-				};
-
-				let not = match cast_notification::<SetTrace>(not) {
-					Ok(_params) => {
-						continue;
-					},
-					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-					Err(ExtractError::MethodMismatch(not)) => not,
-				};
-
-				let not = match cast_notification::<DidSaveTextDocument>(not) {
-					Ok(params) => {
-						let content = params.text.unwrap();
-
-						let diagnostics = get_diagnostics(&content, &lt, &options).await?;
-
-						let params = PublishDiagnosticsParams {
-							uri: params.text_document.uri,
-							version: None,
-							diagnostics,
-						};
-						send_notification::<PublishDiagnostics>(&connection, params)?;
-						continue;
-					},
-					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-					Err(ExtractError::MethodMismatch(not)) => not,
-				};
-				let not = match cast_notification::<DidOpenTextDocument>(not) {
-					Ok(params) => {
-						let content = params.text_document.text;
-
-						let diagnostics = get_diagnostics(&content, &lt, &options).await?;
-
-						let params = PublishDiagnosticsParams {
-							uri: params.text_document.uri,
-							version: None,
-							diagnostics,
-						};
-						send_notification::<PublishDiagnostics>(&connection, params)?;
-						continue;
-					},
-					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-					Err(ExtractError::MethodMismatch(not)) => not,
-				};
-				let not = match cast_notification::<DidChangeConfiguration>(not) {
-					Ok(params) => {
-						options =
-							serde_ignored::deserialize::<_, _, Options>(params.settings, |path| {
-								eprintln!("unknown option: {}", path);
-							})?;
-						lt = options.create_lt().await?;
-						continue;
-					},
-					Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
-					Err(ExtractError::MethodMismatch(not)) => not,
-				};
-				eprintln!("unknown notification: {:?}", not);
-			},
-		}
-	}
-	Ok(())
-}
-
-fn cast_request<R>(req: Request) -> Result<(RequestId, R::Params), ExtractError<Request>>
-where
-	R: lsp_types::request::Request,
-	R::Params: serde::de::DeserializeOwned,
-{
-	req.extract(R::METHOD)
-}
-
-fn cast_notification<N>(not: Notification) -> Result<N::Params, ExtractError<Notification>>
-where
-	N: lsp_types::notification::Notification,
-	N::Params: serde::de::DeserializeOwned,
-{
-	not.extract(N::METHOD)
-}
-
-#[allow(dead_code)]
-fn send_request<R>(connection: &Connection, id: i32, params: R::Params) -> anyhow::Result<()>
-where
-	R: lsp_types::request::Request,
-{
-	let message = Message::Request(Request::new(id.into(), R::METHOD.into(), params));
-	connection.sender.send(message)?;
-
-	Ok(())
-}
-
-fn send_response<R>(connection: &Connection, id: RequestId, result: R::Result) -> anyhow::Result<()>
-where
-	R: lsp_types::request::Request,
-{
-	let message = Message::Response(Response::new_ok(id, result));
-	connection.sender.send(message)?;
-	Ok(())
-}
-
-fn send_notification<N>(connection: &Connection, params: N::Params) -> anyhow::Result<()>
-where
-	N: lsp_types::notification::Notification,
-{
-	let message = Message::Notification(Notification::new(N::METHOD.into(), params));
-	connection.sender.send(message)?;
-	Ok(())
-}
-
 async fn get_diagnostics(
 	text: &str,
 	lt: &LanguageTool,
 	options: &Options,
+	line: usize,
 ) -> anyhow::Result<Vec<Diagnostic>> {
-	let mut position = TextWithPosition::new(&text);
+	let mut position = TextWithPosition::new_with_line(&text, line);
 
 	let diagnostics = lt
 		.check_source(text, &options.rules)
@@ -301,11 +381,11 @@ async fn get_diagnostics(
 
 			Diagnostic {
 				range: Range {
-					start: lsp_types::Position {
+					start: tower_lsp::lsp_types::Position {
 						line: start.line as u32,
 						character: start.column as u32,
 					},
-					end: lsp_types::Position {
+					end: tower_lsp::lsp_types::Position {
 						line: end.line as u32,
 						character: end.column as u32,
 					},
@@ -323,4 +403,57 @@ async fn get_diagnostics(
 		.collect::<Vec<_>>();
 
 	Ok(diagnostics)
+}
+
+#[derive(Debug)]
+struct Source {
+	lines: Vec<String>,
+}
+
+impl Source {
+	pub fn new(text: &str) -> Self {
+		Self { lines: Self::lines(text).collect() }
+	}
+
+	fn lines(text: &str) -> impl Iterator<Item = String> + '_ {
+		text.split("\n").map(|line| String::from(line))
+	}
+
+	pub fn edit(&mut self, range: Range, text: &str) {
+		let start = self
+			.lines
+			.get(range.start.line as usize)
+			.map(|line| line.chars().take(range.start.character as usize))
+			.unwrap_or("".chars().take(0));
+		let end = self
+			.lines
+			.get(range.end.line as usize)
+			.map(|line| line.chars().skip(range.end.character as usize))
+			.unwrap_or("".chars().skip(0));
+		let max = (range.end.line as usize + 1).min(self.lines.len());
+		let mut res = start.collect::<String>();
+		res += text;
+		res.extend(end);
+
+		self.lines.splice(
+			range.start.line as usize..max,
+			Self::lines(&res).map(|line| String::from(line)),
+		);
+	}
+
+	pub fn line(&self, index: usize) -> &str {
+		self.lines
+			.get(index)
+			.map(|line| line.as_str())
+			.unwrap_or("")
+	}
+
+	pub fn text(&self) -> String {
+		let mut res = String::from(&self.lines[0]);
+		for line in &self.lines[1..] {
+			res += "\n";
+			res += line;
+		}
+		res
+	}
 }

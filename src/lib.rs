@@ -13,6 +13,7 @@ pub trait LanguageToolBackend {
 	async fn check_source(&self, text: &str, rules: &Rules) -> anyhow::Result<Vec<Suggestion>>;
 }
 
+#[derive(Debug)]
 pub enum LanguageTool {
 	#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
 	JNI(jni::LanguageToolJNI),
@@ -117,6 +118,14 @@ impl<'a> TextWithPosition<'a> {
 	pub fn new(content: &'a str) -> Self {
 		Self {
 			line: 0,
+			column: 0,
+			content: StringCursor::new(content),
+		}
+	}
+
+	pub fn new_with_line(content: &'a str, line: usize) -> Self {
+		Self {
+			line,
 			column: 0,
 			content: StringCursor::new(content),
 		}

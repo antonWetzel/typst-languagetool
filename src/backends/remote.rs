@@ -7,6 +7,7 @@ use crate::{
 	LanguageToolBackend, Suggestion,
 };
 
+#[derive(Debug)]
 pub struct LanguageToolRemote {
 	lang: String,
 	server_client: ServerClient,

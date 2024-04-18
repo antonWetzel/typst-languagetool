@@ -10,6 +10,7 @@ use crate::{
 	LanguageToolBackend, Rules, Suggestion,
 };
 
+#[derive(Debug)]
 pub struct LanguageToolJNI {
 	jvm: JavaVM,
 	lang_tool: GlobalRef,
