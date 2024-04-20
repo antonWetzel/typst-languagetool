@@ -1,18 +1,18 @@
 mod output;
 
 use clap::{Parser, ValueEnum};
+
+use colored::Colorize;
+use lt_world::LtWorld;
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
-use typst_languagetool::{LanguageTool, TextWithPosition};
+use typst_languagetool::{LanguageTool, LanguageToolBackend, Suggestion};
 
 use std::{
-	fs::File,
-	io::BufReader,
+	collections::HashMap,
 	path::{Path, PathBuf},
 	time::Duration,
 };
-
-use crate::output::{output_plain, output_pretty};
 
 #[derive(ValueEnum, Clone, Debug)]
 enum Task {
@@ -25,7 +25,17 @@ struct Args {
 	task: Task,
 
 	/// File to check, may be a folder with `watch`.
-	path: PathBuf,
+	#[clap(short, long, default_value = None)]
+	path: Option<PathBuf>,
+
+	/// Main file for the document. Defaults to `path`.
+	#[clap(short, long, default_value = None)]
+	root: Option<PathBuf>,
+
+	/// Main file for the document.
+	/// Defaults to `path`.
+	#[clap(short, long, default_value = None)]
+	main: Option<PathBuf>,
 
 	/// Document Language ("de-DE", "en-US", ...).
 	#[clap(short, long, default_value = "en-US")]
@@ -35,20 +45,20 @@ struct Args {
 	#[clap(long, default_value_t = 0.1, id = "SECONDS")]
 	delay: f64,
 
-	/// Print results without annotations for easy regex evaluation.
-	#[clap(short, long, default_value_t = false)]
-	plain: bool,
+	/// Length in chars to seperate chunks
+	#[clap(long, default_value_t = 1000)]
+	chunk_size: usize,
 
-	/// Path to rules file.
-	#[clap(short, long, default_value = None)]
-	rules: Option<PathBuf>,
+	/// Print results without annotations for easy regex evaluation.
+	#[clap(long, default_value_t = false)]
+	plain: bool,
 
 	/// Path to dictionary file.
 	#[clap(short, long, default_value = None)]
 	dictionary: Option<PathBuf>,
 
-	#[clap(long = "disabled-check", id = "ID")]
 	/// Languagetool Rule ID to ignore.
+	#[clap(long = "disabled-check", id = "ID")]
 	disabled_checks: Vec<String>,
 
 	/// Use bundled languagetool jar.
@@ -80,6 +90,13 @@ async fn main() -> anyhow::Result<()> {
 		&args.language,
 	)?;
 
+	let world = match (args.path.clone(), args.main.clone()) {
+		(_, Some(main)) => lt_world::LtWorld::new(main, args.root.clone()),
+		(Some(main), None) => lt_world::LtWorld::new(main, args.root.clone()),
+
+		_ => return Err(anyhow::anyhow!("Invalid typst settings.")),
+	};
+
 	if let Some(path) = &args.dictionary {
 		let content = std::fs::read_to_string(path)?;
 		let words = content
@@ -91,24 +108,33 @@ async fn main() -> anyhow::Result<()> {
 	lt.disable_checks(&args.disabled_checks).await?;
 
 	match args.task {
-		Task::Check => check(args, &mut lt).await?,
-		Task::Watch => watch(args, &mut lt).await?,
+		Task::Check => check(args, lt, world).await?,
+		Task::Watch => watch(args, lt, world).await?,
 	}
 
 	Ok(())
 }
 
-async fn check(args: Args, lt: &mut LanguageTool) -> anyhow::Result<()> {
-	handle_file(&args.path, lt, &args).await?;
+async fn check(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::Result<()> {
+	handle_file(
+		args.path.as_ref().unwrap(),
+		&mut lt,
+		&args,
+		&mut world,
+		args.chunk_size,
+		&mut Cache::new(),
+	)
+	.await?;
 	Ok(())
 }
 
-async fn watch(args: Args, lt: &mut LanguageTool) -> anyhow::Result<()> {
+async fn watch(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::Result<()> {
 	let (tx, rx) = std::sync::mpsc::channel();
 	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), tx)?;
+	let mut cache = Cache::new();
 	watcher
 		.watcher()
-		.watch(&args.path, RecursiveMode::Recursive)?;
+		.watch(world.root(), RecursiveMode::Recursive)?;
 
 	for events in rx {
 		for event in events.unwrap() {
@@ -116,42 +142,87 @@ async fn watch(args: Args, lt: &mut LanguageTool) -> anyhow::Result<()> {
 				Some(ext) if ext == "typ" => {},
 				_ => continue,
 			}
-			handle_file(&event.path, lt, &args).await?;
+
+			handle_file(
+				&event.path,
+				&mut lt,
+				&args,
+				&mut world,
+				args.chunk_size,
+				&mut cache,
+			)
+			.await?;
 		}
 	}
 	Ok(())
 }
 
-async fn handle_file(path: &Path, lt: &LanguageTool, args: &Args) -> anyhow::Result<()> {
-	let mut text = std::fs::read_to_string(path)?;
-	if !args.plain {
-		// annotate snippet uses 1 step for tab, while the terminal uses more
-		text = text.replace("\t", "    ");
-	}
-
-	let rules = if let Some(path) = &args.rules {
-		let file = File::open(path)?;
-		let reader = BufReader::new(file);
-		serde_json::from_reader(reader)?
-	} else {
-		typst_languagetool::Rules::new()
+async fn handle_file(
+	path: &Path,
+	lt: &LanguageTool,
+	args: &Args,
+	world: &LtWorld,
+	chunk_size: usize,
+	cache: &mut Cache,
+) -> anyhow::Result<()> {
+	let Some(doc) = world.compile() else {
+		if args.plain {
+			println!("Failed to compile document!");
+		} else {
+			println!("{}", "Failed to compile document!\n".red().bold());
+		}
+		return Ok(());
 	};
+
+	let paragraphs = typst_languagetool::convert::document(&doc, chunk_size);
+	let file_id = world.file_id(path);
+	let mut collector = typst_languagetool::FileCollector::new(file_id, world);
+	let mut next_cache = Cache::new();
+	for (text, mapping) in paragraphs {
+		let suggestions = if let Some(suggestions) = cache.get(&text) {
+			suggestions
+		} else {
+			lt.check_text(&text).await?
+		};
+
+		collector.add(&suggestions, mapping);
+		next_cache.insert(text, suggestions);
+	}
+	*cache = next_cache;
+
+	let (source, diagnostics) = collector.finish();
 
 	if args.plain {
 		println!("START");
-	}
-	let mut position = TextWithPosition::new(&text);
-	let suggestions = lt.check_source(&text, &rules).await?;
-	for suggestion in suggestions {
-		if args.plain {
-			output_plain(path, &mut position, suggestion);
-		} else {
-			output_pretty(path, &mut position, suggestion, 50);
+		for diagnostic in diagnostics {
+			output::plain(&path, &source, diagnostic);
 		}
-	}
-	if args.plain {
 		println!("END");
+	} else {
+		println!("{}", "\n\nChecking Document\n".green().bold());
+		for diagnostic in diagnostics {
+			output::pretty(&path, &source, diagnostic);
+		}
 	}
 
 	Ok(())
+}
+
+#[derive(Debug)]
+struct Cache {
+	cache: HashMap<String, Vec<Suggestion>>,
+}
+
+impl Cache {
+	pub fn new() -> Self {
+		Self { cache: HashMap::new() }
+	}
+
+	pub fn get(&mut self, text: &str) -> Option<Vec<Suggestion>> {
+		self.cache.remove(text)
+	}
+
+	pub fn insert(&mut self, text: String, suggestions: Vec<Suggestion>) {
+		self.cache.insert(text, suggestions);
+	}
 }

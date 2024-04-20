@@ -1,27 +1,29 @@
 use std::{io::stdout, io::Write, ops::Not, path::Path};
 
 use annotate_snippets::{Level, Renderer, Snippet};
-use typst_languagetool::{Suggestion, TextWithPosition};
+use typst::syntax::Source;
+use typst_languagetool::Diagnostic;
 
 const MAX_SUGGESTIONS: usize = 20;
 
-pub fn output_plain(file: &Path, position: &mut TextWithPosition, suggestion: Suggestion) {
+pub fn plain(file: &Path, source: &Source, diagnostic: Diagnostic) {
 	let mut out = stdout().lock();
-	let start = position.get_position(suggestion.start, false);
-	let end = position.get_position(suggestion.end, false);
+
+	let (start_line, start_column) = byte_to_position(source, diagnostic.locations[0].start);
+	let (end_line, end_column) = byte_to_position(source, diagnostic.locations[0].end);
 	write!(
 		out,
 		"{} {}:{}-{}:{} info {}",
 		file.display(),
-		start.line + 1,
-		start.column + 1,
-		end.line + 1,
-		end.column + 1,
-		suggestion.message,
+		start_line + 1,
+		start_column + 1,
+		end_line + 1,
+		end_column + 1,
+		diagnostic.message,
 	)
 	.unwrap();
 
-	let mut suggestions = suggestion
+	let mut suggestions = diagnostic
 		.replacements
 		.into_iter()
 		.filter(|suggestion| suggestion.trim().is_empty().not())
@@ -37,30 +39,31 @@ pub fn output_plain(file: &Path, position: &mut TextWithPosition, suggestion: Su
 	}
 }
 
-pub fn output_pretty(
-	file: &Path,
-	position: &mut TextWithPosition,
-	suggestion: Suggestion,
-	context_range: usize,
-) {
+pub fn pretty(file: &Path, source: &Source, diagnostic: Diagnostic) {
 	let file_name = format!("{}", file.display());
 
-	let start = position.get_position(suggestion.start, false);
-	let pretty_start = position.get_position(suggestion.start.saturating_sub(context_range), true);
-	let end = position.get_position(suggestion.end, false);
-	let pretty_end = position.get_position(suggestion.end + context_range, true);
+	let (start_line, _) = byte_to_position(source, diagnostic.locations[0].start);
+	let (end_line, _) = byte_to_position(source, diagnostic.locations[0].end);
+	let text = source.text();
+	let context = if start_line == end_line {
+		source.line_to_range(start_line).unwrap()
+	} else {
+		let start = source.line_to_byte(start_line).unwrap();
+		let end = source.line_to_byte(end_line + 1).unwrap_or(text.len());
+		start..end
+	};
 
-	let mut snippet = Snippet::source(&position.substring(pretty_start.utf_8, pretty_end.utf_8))
-		.line_start(start.line + 1)
+	let mut snippet = Snippet::source(&text[context.clone()])
+		.line_start(start_line + 1)
 		.origin(&file_name)
 		.fold(true);
 
-	let start = start.utf_8 - pretty_start.utf_8;
-	let end = end.utf_8 - pretty_start.utf_8;
+	let start = diagnostic.locations[0].start - context.start;
+	let end = diagnostic.locations[0].end - context.start;
 
-	snippet = snippet.annotation(Level::Info.span(start..end).label(&suggestion.message));
+	snippet = snippet.annotation(Level::Info.span(start..end).label(&diagnostic.message));
 
-	for replacement in suggestion
+	for replacement in diagnostic
 		.replacements
 		.iter()
 		.filter(|replacement| replacement.trim().is_empty().not())
@@ -69,10 +72,18 @@ pub fn output_pretty(
 		snippet = snippet.annotation(Level::Help.span(end..end).label(&replacement));
 	}
 	let message = Level::Info
-		.title(&suggestion.rule_description)
-		.id(&suggestion.rule_id)
+		.title(&diagnostic.rule_description)
+		.id(&diagnostic.rule_id)
 		.snippet(snippet);
 
 	let renderer = Renderer::styled();
 	println!("{}", renderer.render(message));
+}
+
+fn byte_to_position(source: &Source, index: usize) -> (usize, usize) {
+	let line = source.byte_to_line(index).unwrap();
+	let start = source.line_to_byte(line).unwrap();
+	let head = source.get(start..index).unwrap();
+	let column = head.chars().count();
+	(line, column)
 }

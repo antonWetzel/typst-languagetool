@@ -13,7 +13,7 @@ anyhow.workspace = true
 languagetool-rust = { workspace = true, optional = true }
 
 [workspace]
-members = [".", "cli", "lsp"]
+members = [".", "cli", "lsp", "lt-world"]
 
 [features]
 default = []
@@ -24,6 +24,8 @@ remote-server = ["dep:languagetool-rust"]
 
 [workspace.dependencies]
 typst-languagetool = { path = "." }
+lt-world = { path = "./lt-world" }
+
 annotate-snippets = "0.11.0"
 clap = { version = "4.3.21", features = ["derive"] }
 notify = "6.0.1"
@@ -37,3 +39,9 @@ anyhow = "1.0.71"
 languagetool-rust = "2.1.4"
 tokio = { version = "1.37.0", features = ["rt", "macros", "rt-multi-thread"] }
 tower-lsp = "0.20.0"
+comemo = "0.4.0"
+chrono = "0.4.38"
+dirs = "5.0.1"
+typst-assets = { version = "0.11.0", features = ["fonts"] }
+fontdb = "0.16.2"
+colored = "2.1.0"

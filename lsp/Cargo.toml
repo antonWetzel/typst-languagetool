@@ -18,7 +18,9 @@ remote-server = ["typst-languagetool/remote-server"]
 
 [dependencies]
 typst-languagetool.workspace = true
+lt-world.workspace = true
 
+typst.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 serde_ignored.workspace = true

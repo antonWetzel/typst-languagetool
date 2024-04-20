@@ -1,175 +1,157 @@
-use std::ops::Not;
+use std::ops::{Not, Range};
 
-use typst::syntax::{SyntaxKind, SyntaxNode};
+use typst::{
+	layout::{Abs, Point},
+	model::Document,
+	syntax::{Source, Span, SyntaxKind},
+};
 
-use crate::rules::Rules;
+use crate::Suggestion;
 
-pub trait TextBuilder {
-	fn add_text(&mut self, text: &str) -> anyhow::Result<()>;
-	fn add_markup(&mut self, markup: &str) -> anyhow::Result<()>;
-	fn add_encoded(&mut self, markup: &str, text: &str) -> anyhow::Result<()>;
-	// fn maybe_seperate(&mut self) {}
+pub struct Mapping {
+	chars: Vec<(Span, Range<u16>)>,
 }
 
-pub fn convert(
-	node: &SyntaxNode,
-	rules: &Rules,
-	text_builder: &mut impl TextBuilder,
-) -> anyhow::Result<()> {
-	let state = State { mode: Mode::Text, after_argument: "" };
-	for child in node.children() {
-		state.convert(child, text_builder, rules)?;
-		// if child.kind() == SyntaxKind::Parbreak {
-		// 	text_builder.maybe_seperate();
-		// }
-	}
-	Ok(())
-}
-
-#[derive(PartialEq, Clone, Copy)]
-enum Mode {
-	Text,
-	Markup,
-}
-
-#[derive(Clone, Copy)]
-struct State<'a> {
-	mode: Mode,
-	after_argument: &'a str,
-}
-
-impl<'a> State<'a> {
-	fn convert(
-		mut self,
-		node: &SyntaxNode,
-		output: &mut impl TextBuilder,
-		rules: &'a Rules,
-	) -> anyhow::Result<()> {
-		match node.kind() {
-			SyntaxKind::Text if self.mode == Mode::Text => output.add_text(node.text())?,
-			SyntaxKind::Equation => {
-				output.add_encoded(node.text(), "0")?;
-				Self::skip(node, output)?;
-			},
-			SyntaxKind::FuncCall => {
-				self.mode = Mode::Markup;
-				let name = get_function_name(node).unwrap_or("");
-				let rule = rules.functions.get(name);
-				if let Some(f) = rule {
-					output.add_encoded("", &f.before)?;
-					self.after_argument = &f.after_argument;
-				} else {
-					self.after_argument = "";
+impl Mapping {
+	pub fn location(&self, suggestion: &Suggestion, source: &Source) -> Vec<Range<usize>> {
+		let chars = &self.chars[suggestion.start..suggestion.end];
+		let mut locations = Vec::<Range<usize>>::new();
+		for (span, range) in chars.iter().cloned() {
+			let Some(id) = span.id() else {
+				continue;
+			};
+			if id != source.id() {
+				continue;
+			}
+			let Some(node) = source.find(span) else {
+				continue;
+			};
+			if node.kind() == SyntaxKind::Text {
+				let start = node.range().start;
+				let range = (start + range.start as usize)..(start + range.end as usize);
+				match locations.last_mut() {
+					Some(last_range) if last_range.end == range.start => last_range.end = range.end,
+					_ => locations.push(range),
 				}
-				for child in node.children() {
-					self.convert(child, output, rules)?;
+			} else {
+				let range = node.range();
+				match locations.last_mut() {
+					Some(last_range) if *last_range == range => {},
+					_ => locations.push(range),
 				}
-				if let Some(f) = rule {
-					output.add_encoded("", &f.after)?;
-				}
-			},
-			SyntaxKind::ContentBlock => {
-				for child in node.children() {
-					self.convert(child, output, rules)?;
-				}
-				if self.after_argument.is_empty().not() {
-					output.add_encoded("", self.after_argument)?;
-				}
-			},
-
-			SyntaxKind::Code
-			| SyntaxKind::ModuleImport
-			| SyntaxKind::ModuleInclude
-			| SyntaxKind::LetBinding
-			| SyntaxKind::ShowRule
-			| SyntaxKind::SetRule => {
-				self.mode = Mode::Markup;
-				for child in node.children() {
-					self.convert(child, output, rules)?;
-				}
-			},
-			SyntaxKind::Heading => {
-				output.add_encoded("", "\n\n")?;
-				self.mode = Mode::Markup;
-				for child in node.children() {
-					self.convert(child, output, rules)?;
-				}
-				output.add_encoded("", "\n\n")?;
-			},
-			SyntaxKind::Ref => {
-				output.add_encoded("", "X")?;
-				Self::skip(node, output)?;
-			},
-			SyntaxKind::Markup => {
-				self.mode = Mode::Text;
-				for child in node.children() {
-					self.convert(child, output, rules)?;
-				}
-			},
-			SyntaxKind::Shorthand => match node.text().as_str() {
-				"~" => output.add_encoded(node.text(), " ")?,
-				"--" => output.add_encoded(node.text(), "-")?,
-				"---" => output.add_encoded(node.text(), "-")?,
-				"-?" => output.add_encoded(node.text(), "-")?,
-				_ => output.add_text(node.text())?,
-			},
-			SyntaxKind::Space if self.mode == Mode::Text => {
-				// if there is whitespace after the linebreak ("...\n\t  "), only use ("...\n") as text
-				let linebreak = node.text().rfind(typst::syntax::is_newline).map(|x| x + 1);
-				match linebreak {
-					Some(linebreak) if linebreak < node.text().len() => {
-						output.add_encoded(node.text(), &node.text()[0..linebreak])?
-					},
-					_ => output.add_text(node.text())?,
-				}
-			},
-			SyntaxKind::ListItem => {
-				self.mode = Mode::Markup;
-				for child in node.children() {
-					self.convert(child, output, rules)?;
-				}
-			},
-			SyntaxKind::ListMarker => output.add_encoded(node.text(), "- ")?,
-			SyntaxKind::Parbreak => output.add_encoded(node.text(), "\n\n")?,
-			SyntaxKind::SmartQuote if self.mode == Mode::Text => output.add_text(node.text())?,
-
-			SyntaxKind::Named => {
-				let name = node.children().next().unwrap().text();
-				let rule = rules.arguments.get(name.as_str());
-				if let Some(f) = rule {
-					output.add_encoded("", &f.before)?;
-				}
-				for child in node.children() {
-					self.convert(child, output, rules)?;
-				}
-				if let Some(f) = rule {
-					output.add_encoded("", &f.after)?;
-				}
-			},
-			_ => {
-				output.add_markup(node.text())?;
-				for child in node.children() {
-					self.convert(child, output, rules)?;
-				}
-			},
+			}
 		}
-		Ok(())
-	}
-
-	fn skip(node: &SyntaxNode, output: &mut impl TextBuilder) -> anyhow::Result<()> {
-		output.add_markup(node.text())?;
-		for child in node.children() {
-			Self::skip(child, output)?;
-		}
-		Ok(())
+		locations
 	}
 }
 
-fn get_function_name(node: &SyntaxNode) -> Option<&str> {
-	match node.kind() {
-		SyntaxKind::FuncCall => get_function_name(node.children().next()?),
-		SyntaxKind::Ident => Some(node.text().as_str()),
-		SyntaxKind::FieldAccess => get_function_name(node.children().last()?),
-		_ => None,
+pub fn document(doc: &Document, chunk_size: usize) -> Vec<(String, Mapping)> {
+	let mut converter = Converter::new(chunk_size);
+	let mut res = Vec::new();
+
+	for page in &doc.pages {
+		converter.frame(&page.frame, Point::zero(), &mut res);
+		converter.pagebreak = true;
+	}
+	res.push((converter.text, converter.mapping));
+	res
+}
+
+struct Converter {
+	text: String,
+	mapping: Mapping,
+	x: Abs,
+	y: Abs,
+	span: (Span, u16),
+	pagebreak: bool,
+	chunk_size: usize,
+}
+
+impl Converter {
+	fn new(chunk_size: usize) -> Self {
+		Self {
+			text: String::new(),
+			mapping: Mapping { chars: Vec::new() },
+			x: Abs::zero(),
+			y: Abs::zero(),
+			span: (Span::detached(), 0),
+			pagebreak: false,
+			chunk_size,
+		}
+	}
+
+	fn insert_space(&mut self) {
+		self.text += " ";
+		self.mapping.chars.push((Span::detached(), 0..0));
+	}
+
+	fn insert_parbreak(&mut self, res: &mut Vec<(String, Mapping)>) {
+		if self.pagebreak || self.mapping.chars.len() > self.chunk_size {
+			let text = std::mem::take(&mut self.text);
+			let mapping = std::mem::replace(&mut self.mapping, Mapping { chars: Vec::new() });
+			res.push((text, mapping));
+			*self = Converter::new(self.chunk_size);
+			return;
+		}
+		self.text += "\n\n";
+		self.mapping.chars.push((Span::detached(), 0..0));
+		self.mapping.chars.push((Span::detached(), 0..0));
+	}
+
+	fn frame(
+		&mut self,
+		frame: &typst::layout::Frame,
+		pos: Point,
+		res: &mut Vec<(String, Mapping)>,
+	) {
+		for &(p, ref item) in frame.items() {
+			self.item(p + pos, item, res);
+		}
+	}
+
+	fn item(
+		&mut self,
+		pos: Point,
+		item: &typst::layout::FrameItem,
+		res: &mut Vec<(String, Mapping)>,
+	) {
+		use typst::introspection::Meta as M;
+		use typst::layout::FrameItem as I;
+		match item {
+			I::Group(g) => self.frame(&g.frame, pos, res),
+			I::Text(t) => {
+				let (same_span, missing_space) = {
+					let start = t.glyphs[0].span;
+					(start.0 == self.span.0, start.1 != self.span.1)
+				};
+
+				let same_x = self.x.approx_eq(pos.x);
+				let same_y = self.y.approx_eq(pos.y);
+
+				match (same_span, same_x, same_y) {
+					(_, true, _) => {},
+					(true, _, _) if missing_space.not() => {},
+					(true, _, _) => self.insert_space(),
+					(false, false, true) => self.insert_space(),
+					(false, false, false) => self.insert_parbreak(res),
+				}
+				self.x = pos.x + t.width();
+				self.y = pos.y;
+
+				self.text += t.text.as_str();
+				let mut iter = t.glyphs.iter();
+				for _ in t.text.encode_utf16() {
+					let g = iter.next();
+					let m = g
+						.map(|g| (g.span.0, g.span.1..(g.span.1 + g.range.len() as u16)))
+						.unwrap_or((Span::detached(), 0..0));
+					if m.0.is_detached().not() {
+						self.span = (m.0, m.1.end);
+					}
+					self.mapping.chars.push(m);
+				}
+			},
+			I::Meta(M::Link(..) | M::Elem(..) | M::Hide, _) | I::Shape(..) | I::Image(..) => {},
+		}
 	}
 }

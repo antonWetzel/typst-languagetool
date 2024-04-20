@@ -2,6 +2,8 @@
 
 Spellcheck typst files with LanguageTool.
 
+# TODO: UPDATE FOR DOCUMENT CHECK
+ 
 ## Done
 
 - only use text from typst files

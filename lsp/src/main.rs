@@ -1,8 +1,11 @@
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::ops::Not;
+use std::path::{Path, PathBuf};
 
-use typst_languagetool::{LanguageTool, Rules, TextWithPosition};
+use lt_world::LtWorld;
+use typst::syntax::Source;
+use typst_languagetool::{LanguageTool, LanguageToolBackend, Suggestion};
 
 use tokio::sync::RwLock;
 use tower_lsp::jsonrpc::{self, Result};
@@ -36,7 +39,8 @@ enum State {
 	Running {
 		lt: LanguageTool,
 		options: Options,
-		sources: HashMap<Url, Source>,
+		world: LtWorld,
+		cache: Cache,
 	},
 }
 
@@ -54,10 +58,19 @@ impl Backend {
 	}
 }
 
+fn make_absolute(cwd: &Path, path: &mut Option<PathBuf>) {
+	if let Some(path) = path {
+		if path.is_absolute() {
+			return;
+		}
+		*path = cwd.join(&path)
+	}
+}
+
 #[tower_lsp::async_trait]
 impl LanguageServer for Backend {
 	async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-		let options = (|| {
+		let mut options = (|| {
 			let options = params.initialization_options?;
 			let options = serde_ignored::deserialize(options, |path| {
 				eprintln!("unknown option: {}", path);
@@ -83,10 +96,25 @@ impl LanguageServer for Backend {
 			..Default::default()
 		};
 
-		let lt = options.create_lt().await.map_err(map_err)?;
-		let mut state = self.state.write().await;
-		*state = State::Running { lt, options, sources: HashMap::new() };
+		let cwd = std::env::current_dir().unwrap();
+		make_absolute(&cwd, &mut options.path);
+		make_absolute(&cwd, &mut options.main);
+		make_absolute(&cwd, &mut options.root);
 
+		let lt = options.create_lt().await.map_err(map_err)?;
+
+		let world = match (options.path.clone(), options.main.clone()) {
+			(_, Some(main)) => lt_world::LtWorld::new(main, options.root.clone()),
+			(Some(main), None) => lt_world::LtWorld::new(main, options.root.clone()),
+
+			_ => return Err(map_err(anyhow::anyhow!("Invalid typst settings."))),
+		};
+		self.client
+			.log_message(MessageType::INFO, "First compilation")
+			.await;
+
+		let mut state = self.state.write().await;
+		*state = State::Running { lt, options, world, cache: Cache::new() };
 		Ok(InitializeResult { server_info: None, capabilities })
 	}
 
@@ -94,23 +122,46 @@ impl LanguageServer for Backend {
 		self.client
 			.log_message(MessageType::INFO, "server initialized!")
 			.await;
+
+		let mut state = self.state.write().await;
+		let State::Running { world, cache, lt, options, .. } = &mut *state else {
+			return self.error("invalid state in 'did_open'").await;
+		};
+
+		let Some(doc) = world.compile() else {
+			self.client
+				.log_message(MessageType::INFO, "Failed to compile document.")
+				.await;
+			return;
+		};
+		let paragraphs = typst_languagetool::convert::document(&doc, options.chunk_size);
+		let l = paragraphs.len();
+		for (idx, (text, _)) in paragraphs.into_iter().enumerate() {
+			let Ok(suggestions) = lt.check_text(&text).await else {
+				continue;
+			};
+			cache.insert(text, suggestions);
+			eprintln!("Initial check: {}/{}", idx + 1, l);
+		}
 	}
 
 	async fn did_open(&self, params: DidOpenTextDocumentParams) {
-		let source = Source::new(&params.text_document.text);
 		let mut state = self.state.write().await;
-		let State::Running { sources, .. } = &mut *state else {
+		let State::Running { world, .. } = &mut *state else {
 			return self.error("invalid state in 'did_open'").await;
 		};
-		sources.insert(params.text_document.uri, source);
+		world.use_shadow_file(
+			&params.text_document.uri.to_file_path().unwrap(),
+			params.text_document.text,
+		);
 	}
 
 	async fn did_close(&self, params: DidCloseTextDocumentParams) {
 		let mut state = self.state.write().await;
-		let State::Running { sources, .. } = &mut *state else {
+		let State::Running { world, .. } = &mut *state else {
 			return self.error("invalid state in 'did_close'").await;
 		};
-		sources.remove(&params.text_document.uri);
+		world.use_original_file(&params.text_document.uri.to_file_path().unwrap());
 	}
 
 	async fn did_save(&self, params: DidSaveTextDocumentParams) {
@@ -122,15 +173,15 @@ impl LanguageServer for Backend {
 			.await;
 
 		let diagnostics = {
-			let state = self.state.read().await;
+			let mut state = self.state.write().await;
 
-			let State::Running { lt, options, sources, .. } = &*state else {
+			let State::Running { lt, world, cache, options, .. } = &mut *state else {
 				return self.error("invalid state in 'did_save'").await;
 			};
 
-			let content = sources.get(&params.text_document.uri).unwrap().text();
+			let path = params.text_document.uri.to_file_path().unwrap();
 
-			match get_diagnostics(&content, &lt, &options, 0).await {
+			match get_diagnostics(&path, lt, world, cache, options.chunk_size).await {
 				Ok(d) => d,
 				Err(err) => return self.error(err).await,
 			}
@@ -147,21 +198,29 @@ impl LanguageServer for Backend {
 	}
 
 	async fn did_change(&self, params: DidChangeTextDocumentParams) {
-		let on_change = {
-			let mut state = self.state.write().await;
-			let State::Running { sources, options, .. } = &mut *state else {
-				return self.error("invalid state in 'did_change'").await;
-			};
-			let source = sources.get_mut(&params.text_document.uri).unwrap();
-			for change in &params.content_changes {
-				if let Some(range) = change.range {
-					source.edit(range, &change.text);
-				}
-			}
-			options.on_change
+		let mut state = self.state.write().await;
+		let State::Running { world, options, lt, cache } = &mut *state else {
+			return self.error("invalid state in 'did_change'").await;
 		};
+		let source = world
+			.shadow_file(&params.text_document.uri.to_file_path().unwrap())
+			.unwrap();
 
-		if on_change.not() {
+		for change in &params.content_changes {
+			if let Some(range) = change.range {
+				let start = source
+					.line_column_to_byte(range.start.line as usize, range.start.character as usize)
+					.unwrap();
+				let end = source
+					.line_column_to_byte(range.end.line as usize, range.end.character as usize)
+					.unwrap();
+				source.edit(start..end, &change.text);
+			} else {
+				source.replace(&change.text);
+			}
+		}
+
+		if options.on_change.not() {
 			return;
 		}
 		let update = params.content_changes.iter().any(|change| {
@@ -172,54 +231,12 @@ impl LanguageServer for Backend {
 			return;
 		}
 
-		let (start, end, diagnostics) = {
-			let state = self.state.read().await;
-			let State::Running { lt, options, sources, .. } = &*state else {
-				return self.error("invalid state in 'did_change'").await;
-			};
+		let path = params.text_document.uri.to_file_path().unwrap();
 
-			let source = sources.get(&params.text_document.uri).unwrap();
-			let line = params
-				.content_changes
-				.iter()
-				.find_map(|change| change.range)
-				.unwrap()
-				.start
-				.line as usize;
-
-			let mut start = line;
-			while start > 0 && source.line(start).trim().is_empty().not() {
-				start -= 1;
-			}
-			let mut end = line;
-			while source.line(end).trim().is_empty().not() {
-				end += 1;
-			}
-			let mut content = String::new();
-			for i in start..end {
-				content += source.line(i);
-				content += "\n";
-			}
-
-			let diagnostics = match get_diagnostics(&content, lt, options, start).await {
-				Ok(d) => d,
-				Err(err) => return self.error(err).await,
-			};
-
-			(start, end, diagnostics)
+		let diagnostics = match get_diagnostics(&path, lt, world, cache, options.chunk_size).await {
+			Ok(d) => d,
+			Err(err) => return self.error(err).await,
 		};
-
-		self.client
-			.log_message(
-				MessageType::INFO,
-				format!(
-					"Checking: {:#?} ({}-{})",
-					params.text_document.uri.path(),
-					start + 1,
-					end + 1,
-				),
-			)
-			.await;
 
 		let params = PublishDiagnosticsParams {
 			uri: params.text_document.uri,
@@ -322,28 +339,40 @@ impl LanguageServer for Backend {
 #[serde(default)]
 struct Options {
 	language: String,
-	rules: Rules,
 	dictionary: Vec<String>,
 	disabled_checks: Vec<String>,
+
 	bundled: bool,
 	jar_location: Option<String>,
 	host: Option<String>,
 	port: Option<String>,
+
+	chunk_size: usize,
 	on_change: bool,
+
+	path: Option<PathBuf>,
+	root: Option<PathBuf>,
+	main: Option<PathBuf>,
 }
 
 impl Default for Options {
 	fn default() -> Self {
 		Self {
 			language: "en-US".into(),
-			rules: Rules::new(),
 			dictionary: Vec::new(),
 			disabled_checks: Vec::new(),
+
 			bundled: false,
 			jar_location: None,
 			host: None,
 			port: None,
+
+			chunk_size: 1000,
 			on_change: false,
+
+			path: None,
+			root: None,
+			main: None,
 		}
 	}
 }
@@ -363,97 +392,92 @@ impl Options {
 	}
 }
 
-async fn get_diagnostics(
-	text: &str,
-	lt: &LanguageTool,
-	options: &Options,
-	line: usize,
-) -> anyhow::Result<Vec<Diagnostic>> {
-	let mut position = TextWithPosition::new_with_line(&text, line);
+#[derive(Debug)]
+struct Cache {
+	cache: HashMap<String, Vec<Suggestion>>,
+}
 
-	let diagnostics = lt
-		.check_source(text, &options.rules)
-		.await?
+impl Cache {
+	pub fn new() -> Self {
+		Self { cache: HashMap::new() }
+	}
+
+	pub fn get(&mut self, text: &str) -> Option<Vec<Suggestion>> {
+		self.cache.remove(text)
+	}
+
+	pub fn insert(&mut self, text: String, suggestions: Vec<Suggestion>) {
+		self.cache.insert(text, suggestions);
+	}
+}
+
+async fn get_diagnostics(
+	path: &Path,
+	lt: &LanguageTool,
+	world: &LtWorld,
+	cache: &mut Cache,
+	chunk_size: usize,
+) -> anyhow::Result<Vec<Diagnostic>> {
+	let Some(doc) = world.compile() else {
+		eprintln!("TODO: Warning could not compile");
+		return Ok(Vec::new());
+	};
+
+	let paragraphs = typst_languagetool::convert::document(&doc, chunk_size);
+	let file_id = world.file_id(path);
+	let mut collector = typst_languagetool::FileCollector::new(file_id, world);
+	let mut next_cache = Cache::new();
+	let l = paragraphs.len();
+	for (idx, (text, mapping)) in paragraphs.into_iter().enumerate() {
+		let suggestions = if let Some(suggestions) = cache.get(&text) {
+			suggestions
+		} else {
+			eprintln!("Checking {}/{}", idx, l);
+			lt.check_text(&text).await?
+		};
+		collector.add(&suggestions, mapping);
+		next_cache.insert(text, suggestions);
+	}
+	*cache = next_cache;
+
+	let (source, diagnostics) = collector.finish();
+
+	let diagnostics = diagnostics
 		.into_iter()
-		.map(|suggestion| {
-			let start = position.get_position(suggestion.start, false);
-			let end = position.get_position(suggestion.end, false);
+		.map(|diagnostic| {
+			let (start_line, start_column) =
+				byte_to_position(&source, diagnostic.locations[0].start);
+			let (end_line, end_column) = byte_to_position(&source, diagnostic.locations[0].end);
 
 			Diagnostic {
 				range: Range {
 					start: tower_lsp::lsp_types::Position {
-						line: start.line as u32,
-						character: start.column as u32,
+						line: start_line as u32,
+						character: start_column as u32,
 					},
 					end: tower_lsp::lsp_types::Position {
-						line: end.line as u32,
-						character: end.column as u32,
+						line: end_line as u32,
+						character: end_column as u32,
 					},
 				},
 				severity: Some(DiagnosticSeverity::INFORMATION),
-				code: Some(NumberOrString::String(suggestion.rule_id)),
+				code: Some(NumberOrString::String(diagnostic.rule_id)),
 				code_description: None,
 				source: None,
-				message: suggestion.message,
+				message: diagnostic.message,
 				related_information: None,
 				tags: None,
-				data: serde_json::to_value(suggestion.replacements).ok(),
+				data: serde_json::to_value(diagnostic.replacements).ok(),
 			}
 		})
-		.collect::<Vec<_>>();
+		.collect();
 
 	Ok(diagnostics)
 }
-
-#[derive(Debug)]
-struct Source {
-	lines: Vec<String>,
-}
-
-impl Source {
-	pub fn new(text: &str) -> Self {
-		Self { lines: Self::lines(text).collect() }
-	}
-
-	fn lines(text: &str) -> impl Iterator<Item = String> + '_ {
-		text.split("\n").map(|line| String::from(line))
-	}
-
-	pub fn edit(&mut self, range: Range, text: &str) {
-		let start = self
-			.lines
-			.get(range.start.line as usize)
-			.map(|line| line.chars().take(range.start.character as usize))
-			.unwrap_or("".chars().take(0));
-		let end = self
-			.lines
-			.get(range.end.line as usize)
-			.map(|line| line.chars().skip(range.end.character as usize))
-			.unwrap_or("".chars().skip(0));
-		let max = (range.end.line as usize + 1).min(self.lines.len());
-		let mut res = start.collect::<String>();
-		res += text;
-		res.extend(end);
-
-		self.lines.splice(
-			range.start.line as usize..max,
-			Self::lines(&res).map(|line| String::from(line)),
-		);
-	}
-
-	pub fn line(&self, index: usize) -> &str {
-		self.lines
-			.get(index)
-			.map(|line| line.as_str())
-			.unwrap_or("")
-	}
-
-	pub fn text(&self) -> String {
-		let mut res = String::from(&self.lines[0]);
-		for line in &self.lines[1..] {
-			res += "\n";
-			res += line;
-		}
-		res
-	}
+fn byte_to_position(source: &Source, index: usize) -> (usize, usize) {
+	let line = source.byte_to_line(index).unwrap();
+	let start = source.line_to_byte(line).unwrap();
+	let head = source.get(start..index).unwrap();
+	let column = head.chars().count();
+	(line, column)
 }
