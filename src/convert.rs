@@ -3,7 +3,7 @@ use std::ops::{Not, Range};
 use typst::{
 	layout::{Abs, Point},
 	model::Document,
-	syntax::{Source, Span, SyntaxKind},
+	syntax::{FileId, Source, Span, SyntaxKind},
 };
 
 use crate::Suggestion;
@@ -45,15 +45,17 @@ impl Mapping {
 	}
 }
 
-pub fn document(doc: &Document, chunk_size: usize) -> Vec<(String, Mapping)> {
+pub fn document(doc: &Document, chunk_size: usize, file_id: FileId) -> Vec<(String, Mapping)> {
 	let mut converter = Converter::new(chunk_size);
 	let mut res = Vec::new();
 
 	for page in &doc.pages {
-		converter.frame(&page.frame, Point::zero(), &mut res);
+		converter.frame(&page.frame, Point::zero(), &mut res, file_id);
 		converter.pagebreak = true;
 	}
-	res.push((converter.text, converter.mapping));
+	if converter.contains_file {
+		res.push((converter.text, converter.mapping));
+	}
 	res
 }
 
@@ -65,6 +67,7 @@ struct Converter {
 	span: (Span, u16),
 	pagebreak: bool,
 	chunk_size: usize,
+	contains_file: bool,
 }
 
 impl Converter {
@@ -76,6 +79,7 @@ impl Converter {
 			y: Abs::zero(),
 			span: (Span::detached(), 0),
 			pagebreak: false,
+			contains_file: false,
 			chunk_size,
 		}
 	}
@@ -87,9 +91,11 @@ impl Converter {
 
 	fn insert_parbreak(&mut self, res: &mut Vec<(String, Mapping)>) {
 		if self.pagebreak || self.mapping.chars.len() > self.chunk_size {
-			let text = std::mem::take(&mut self.text);
-			let mapping = std::mem::replace(&mut self.mapping, Mapping { chars: Vec::new() });
-			res.push((text, mapping));
+			if self.contains_file {
+				let text = std::mem::take(&mut self.text);
+				let mapping = std::mem::replace(&mut self.mapping, Mapping { chars: Vec::new() });
+				res.push((text, mapping));
+			}
 			*self = Converter::new(self.chunk_size);
 			return;
 		}
@@ -103,9 +109,10 @@ impl Converter {
 		frame: &typst::layout::Frame,
 		pos: Point,
 		res: &mut Vec<(String, Mapping)>,
+		file_id: FileId,
 	) {
 		for &(p, ref item) in frame.items() {
-			self.item(p + pos, item, res);
+			self.item(p + pos, item, res, file_id);
 		}
 	}
 
@@ -114,11 +121,12 @@ impl Converter {
 		pos: Point,
 		item: &typst::layout::FrameItem,
 		res: &mut Vec<(String, Mapping)>,
+		file_id: FileId,
 	) {
 		use typst::introspection::Meta as M;
 		use typst::layout::FrameItem as I;
 		match item {
-			I::Group(g) => self.frame(&g.frame, pos, res),
+			I::Group(g) => self.frame(&g.frame, pos, res, file_id),
 			I::Text(t) => {
 				let (same_span, missing_space) = {
 					let start = t.glyphs[0].span;
@@ -145,8 +153,11 @@ impl Converter {
 					let m = g
 						.map(|g| (g.span.0, g.span.1..(g.span.1 + g.range.len() as u16)))
 						.unwrap_or((Span::detached(), 0..0));
-					if m.0.is_detached().not() {
+					if let Some(id) = m.0.id() {
 						self.span = (m.0, m.1.end);
+						if id == file_id {
+							self.contains_file = true;
+						}
 					}
 					self.mapping.chars.push(m);
 				}

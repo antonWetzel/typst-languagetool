@@ -37,11 +37,17 @@ jni = { version = "0.21.1", features = ["invocation"] }
 serde_ignored = "0.1.10"
 anyhow = "1.0.71"
 languagetool-rust = "2.1.4"
-tokio = { version = "1.37.0", features = ["rt", "macros", "rt-multi-thread"] }
-tower-lsp = "0.20.0"
+tokio = { version = "1.37.0", features = [
+    "rt",
+    "macros",
+    "rt-multi-thread",
+    "time",
+] }
 comemo = "0.4.0"
 chrono = "0.4.38"
 dirs = "5.0.1"
 typst-assets = { version = "0.11.0", features = ["fonts"] }
 fontdb = "0.16.2"
 colored = "2.1.0"
+lsp-server = "0.7.6"
+lsp-types = "0.95.1"

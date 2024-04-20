@@ -174,8 +174,8 @@ async fn handle_file(
 		return Ok(());
 	};
 
-	let paragraphs = typst_languagetool::convert::document(&doc, chunk_size);
 	let file_id = world.file_id(path);
+	let paragraphs = typst_languagetool::convert::document(&doc, chunk_size, file_id);
 	let mut collector = typst_languagetool::FileCollector::new(file_id, world);
 	let mut next_cache = Cache::new();
 	for (text, mapping) in paragraphs {

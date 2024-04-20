@@ -1,339 +1,15 @@
 use std::collections::HashMap;
-use std::fmt::Display;
 use std::ops::Not;
 use std::path::{Path, PathBuf};
 
+use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
+use lsp_types::notification::*;
+use lsp_types::request::*;
+use lsp_types::*;
 use lt_world::LtWorld;
+use serde_json::Value;
 use typst::syntax::Source;
 use typst_languagetool::{LanguageTool, LanguageToolBackend, Suggestion};
-
-use tokio::sync::RwLock;
-use tower_lsp::jsonrpc::{self, Result};
-use tower_lsp::lsp_types::notification::*;
-use tower_lsp::lsp_types::*;
-use tower_lsp::{Client, LanguageServer, LspService, Server};
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-	let stdin = tokio::io::stdin();
-	let stdout = tokio::io::stdout();
-
-	let (service, socket) = LspService::new(|client| Backend {
-		client,
-		state: RwLock::new(State::Started),
-	});
-
-	Server::new(stdin, stdout, socket).serve(service).await;
-	Ok(())
-}
-
-#[derive(Debug)]
-struct Backend {
-	client: Client,
-	state: RwLock<State>,
-}
-
-#[derive(Debug)]
-enum State {
-	Started,
-	Running {
-		lt: LanguageTool,
-		options: Options,
-		world: LtWorld,
-		cache: Cache,
-	},
-}
-
-fn map_err(err: impl Into<anyhow::Error>) -> jsonrpc::Error {
-	jsonrpc::Error {
-		code: jsonrpc::ErrorCode::InternalError,
-		message: format!("{}", err.into()).into(),
-		data: None,
-	}
-}
-
-impl Backend {
-	async fn error(&self, err: impl Display) {
-		self.client.log_message(MessageType::ERROR, err).await;
-	}
-}
-
-fn make_absolute(cwd: &Path, path: &mut Option<PathBuf>) {
-	if let Some(path) = path {
-		if path.is_absolute() {
-			return;
-		}
-		*path = cwd.join(&path)
-	}
-}
-
-#[tower_lsp::async_trait]
-impl LanguageServer for Backend {
-	async fn initialize(&self, params: InitializeParams) -> Result<InitializeResult> {
-		let mut options = (|| {
-			let options = params.initialization_options?;
-			let options = serde_ignored::deserialize(options, |path| {
-				eprintln!("unknown option: {}", path);
-			})
-			.ok()?;
-			Some(options)
-		})()
-		.unwrap_or(Options::default());
-
-		let capabilities = ServerCapabilities {
-			text_document_sync: Some(TextDocumentSyncCapability::Options(
-				TextDocumentSyncOptions {
-					open_close: Some(true),
-					save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
-						include_text: Some(false),
-					})),
-					change: Some(TextDocumentSyncKind::INCREMENTAL),
-					..Default::default()
-				},
-			)),
-
-			code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
-			..Default::default()
-		};
-
-		let cwd = std::env::current_dir().unwrap();
-		make_absolute(&cwd, &mut options.path);
-		make_absolute(&cwd, &mut options.main);
-		make_absolute(&cwd, &mut options.root);
-
-		let lt = options.create_lt().await.map_err(map_err)?;
-
-		let world = match (options.path.clone(), options.main.clone()) {
-			(_, Some(main)) => lt_world::LtWorld::new(main, options.root.clone()),
-			(Some(main), None) => lt_world::LtWorld::new(main, options.root.clone()),
-
-			_ => return Err(map_err(anyhow::anyhow!("Invalid typst settings."))),
-		};
-		self.client
-			.log_message(MessageType::INFO, "First compilation")
-			.await;
-
-		let mut state = self.state.write().await;
-		*state = State::Running { lt, options, world, cache: Cache::new() };
-		Ok(InitializeResult { server_info: None, capabilities })
-	}
-
-	async fn initialized(&self, _: InitializedParams) {
-		self.client
-			.log_message(MessageType::INFO, "server initialized!")
-			.await;
-
-		let mut state = self.state.write().await;
-		let State::Running { world, cache, lt, options, .. } = &mut *state else {
-			return self.error("invalid state in 'did_open'").await;
-		};
-
-		let Some(doc) = world.compile() else {
-			self.client
-				.log_message(MessageType::INFO, "Failed to compile document.")
-				.await;
-			return;
-		};
-		let paragraphs = typst_languagetool::convert::document(&doc, options.chunk_size);
-		let l = paragraphs.len();
-		for (idx, (text, _)) in paragraphs.into_iter().enumerate() {
-			let Ok(suggestions) = lt.check_text(&text).await else {
-				continue;
-			};
-			cache.insert(text, suggestions);
-			eprintln!("Initial check: {}/{}", idx + 1, l);
-		}
-	}
-
-	async fn did_open(&self, params: DidOpenTextDocumentParams) {
-		let mut state = self.state.write().await;
-		let State::Running { world, .. } = &mut *state else {
-			return self.error("invalid state in 'did_open'").await;
-		};
-		world.use_shadow_file(
-			&params.text_document.uri.to_file_path().unwrap(),
-			params.text_document.text,
-		);
-	}
-
-	async fn did_close(&self, params: DidCloseTextDocumentParams) {
-		let mut state = self.state.write().await;
-		let State::Running { world, .. } = &mut *state else {
-			return self.error("invalid state in 'did_close'").await;
-		};
-		world.use_original_file(&params.text_document.uri.to_file_path().unwrap());
-	}
-
-	async fn did_save(&self, params: DidSaveTextDocumentParams) {
-		self.client
-			.log_message(
-				MessageType::INFO,
-				format!("Checking: {:#?}", params.text_document.uri.path()),
-			)
-			.await;
-
-		let diagnostics = {
-			let mut state = self.state.write().await;
-
-			let State::Running { lt, world, cache, options, .. } = &mut *state else {
-				return self.error("invalid state in 'did_save'").await;
-			};
-
-			let path = params.text_document.uri.to_file_path().unwrap();
-
-			match get_diagnostics(&path, lt, world, cache, options.chunk_size).await {
-				Ok(d) => d,
-				Err(err) => return self.error(err).await,
-			}
-		};
-
-		let params = PublishDiagnosticsParams {
-			uri: params.text_document.uri,
-			version: None,
-			diagnostics,
-		};
-		self.client
-			.send_notification::<PublishDiagnostics>(params)
-			.await;
-	}
-
-	async fn did_change(&self, params: DidChangeTextDocumentParams) {
-		let mut state = self.state.write().await;
-		let State::Running { world, options, lt, cache } = &mut *state else {
-			return self.error("invalid state in 'did_change'").await;
-		};
-		let source = world
-			.shadow_file(&params.text_document.uri.to_file_path().unwrap())
-			.unwrap();
-
-		for change in &params.content_changes {
-			if let Some(range) = change.range {
-				let start = source
-					.line_column_to_byte(range.start.line as usize, range.start.character as usize)
-					.unwrap();
-				let end = source
-					.line_column_to_byte(range.end.line as usize, range.end.character as usize)
-					.unwrap();
-				source.edit(start..end, &change.text);
-			} else {
-				source.replace(&change.text);
-			}
-		}
-
-		if options.on_change.not() {
-			return;
-		}
-		let update = params.content_changes.iter().any(|change| {
-			change.text.is_empty() || change.text.chars().any(|c| c.is_alphanumeric().not())
-		});
-
-		if update.not() {
-			return;
-		}
-
-		let path = params.text_document.uri.to_file_path().unwrap();
-
-		let diagnostics = match get_diagnostics(&path, lt, world, cache, options.chunk_size).await {
-			Ok(d) => d,
-			Err(err) => return self.error(err).await,
-		};
-
-		let params = PublishDiagnosticsParams {
-			uri: params.text_document.uri,
-			version: None,
-			diagnostics,
-		};
-		self.client
-			.send_notification::<PublishDiagnostics>(params)
-			.await;
-	}
-
-	async fn did_change_configuration(&self, params: DidChangeConfigurationParams) {
-		let mut unknown_options = String::new();
-		let options = match serde_ignored::deserialize::<_, _, Options>(params.settings, |path| {
-			unknown_options += format!("{} ", path).as_str();
-		}) {
-			Ok(o) => o,
-			Err(err) => return self.error(err).await,
-		};
-		if unknown_options.is_empty().not() {
-			self.client
-				.log_message(
-					MessageType::WARNING,
-					format!("Unknown Options: {}", unknown_options),
-				)
-				.await
-		}
-
-		let lt = match options.create_lt().await {
-			Ok(lt) => lt,
-			Err(err) => return self.error(err).await,
-		};
-		self.client
-			.log_message(
-				MessageType::INFO,
-				format!("Updating Options: {:#?}", options),
-			)
-			.await;
-		let mut state = self.state.write().await;
-		match &mut *state {
-			State::Running { lt: old_lt, options: old_options, .. } => {
-				*old_lt = lt;
-				*old_options = options;
-			},
-			_ => unreachable!(),
-		}
-	}
-
-	async fn code_action(&self, params: CodeActionParams) -> Result<Option<CodeActionResponse>> {
-		let mut action = CodeActionResponse::new();
-
-		let Some(diagnostic) = params.context.diagnostics.last() else {
-			return Ok(None);
-		};
-		let Some(data) = &diagnostic.data else {
-			return Ok(None);
-		};
-
-		let replacements = match serde_json::from_value::<Vec<String>>(data.clone()) {
-			Ok(r) => r,
-			Err(err) => {
-				self.error(err).await;
-				return Ok(None);
-			},
-		};
-
-		for (i, value) in replacements.into_iter().enumerate() {
-			let title = format!("Replace with \"{}\"", value);
-			let replace = TextEdit { range: diagnostic.range, new_text: value };
-			let edit = [(params.text_document.uri.clone(), vec![replace])]
-				.into_iter()
-				.collect();
-
-			action.push(
-				CodeAction {
-					title,
-					is_preferred: Some(i == 0),
-					kind: Some(CodeActionKind::QUICKFIX),
-					diagnostics: Some(params.context.diagnostics.clone()),
-					edit: Some(WorkspaceEdit {
-						changes: Some(edit),
-						..Default::default()
-					}),
-					command: None,
-					disabled: None,
-					data: None,
-				}
-				.into(),
-			);
-		}
-		Ok(Some(action))
-	}
-
-	async fn shutdown(&self) -> Result<()> {
-		Ok(())
-	}
-}
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(default)]
@@ -392,6 +68,464 @@ impl Options {
 	}
 }
 
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+	eprintln!("starting LSP server");
+
+	let (connection, io_threads) = Connection::stdio();
+
+	let capabilities = ServerCapabilities {
+		text_document_sync: Some(TextDocumentSyncCapability::Options(
+			TextDocumentSyncOptions {
+				open_close: Some(true),
+				save: Some(TextDocumentSyncSaveOptions::SaveOptions(SaveOptions {
+					include_text: Some(false),
+				})),
+				change: Some(TextDocumentSyncKind::INCREMENTAL),
+				..Default::default()
+			},
+		)),
+
+		code_action_provider: Some(CodeActionProviderCapability::Simple(true)),
+		..Default::default()
+	};
+
+	let server_capabilities = serde_json::to_value(capabilities).unwrap();
+	let initialization_params = match connection.initialize(server_capabilities) {
+		Ok(it) => it,
+		Err(e) => {
+			if e.channel_is_disconnected() {
+				io_threads.join()?;
+			}
+			return Err(e.into());
+		},
+	};
+	let state = State::new(connection, initialization_params).await;
+	state.main_loop().await?;
+	io_threads.join()?;
+
+	eprintln!("shutting down server");
+	Ok(())
+}
+
+struct State {
+	world: LtWorld,
+	options: Options,
+	cache: Cache,
+	lt: LanguageTool,
+	connection: Connection,
+}
+
+impl State {
+	pub async fn new(connection: Connection, params: Value) -> Self {
+		let mut options = (|| {
+			let params = serde_json::from_value::<InitializeParams>(params).ok()?;
+			let options = params.initialization_options?;
+
+			let options = serde_ignored::deserialize(options, |path| {
+				eprintln!("unknown option: {}", path);
+			})
+			.ok()?;
+			Some(options)
+		})()
+		.unwrap_or(Options::default());
+
+		let cwd = std::env::current_dir().unwrap();
+		make_absolute(&cwd, &mut options.path);
+		make_absolute(&cwd, &mut options.main);
+		make_absolute(&cwd, &mut options.root);
+
+		let cache = Cache::new();
+
+		let lt = options.create_lt().await.unwrap();
+
+		let world = match (options.path.clone(), options.main.clone()) {
+			(_, Some(main)) => lt_world::LtWorld::new(main, options.root.clone()),
+			(Some(main), None) => lt_world::LtWorld::new(main, options.root.clone()),
+
+			_ => return Err(anyhow::anyhow!("Invalid typst settings.")).unwrap(),
+		};
+
+		eprintln!("Compiling document");
+		if world.compile().is_none() {
+			eprintln!("Failed to compile init document");
+		};
+
+		Self { world, options, cache, lt, connection }
+	}
+
+	pub async fn main_loop(mut self) -> anyhow::Result<()> {
+		while let Ok(msg) = self.connection.receiver.recv() {
+			match msg {
+				Message::Request(req) => {
+					if self.connection.handle_shutdown(&req)? {
+						return Ok(());
+					}
+					self.request(req).await?;
+				},
+				Message::Response(resp) => {
+					eprintln!("unknown response: {:?}", resp);
+				},
+				Message::Notification(not) => self.notification(not).await?,
+			}
+		}
+		Ok(())
+	}
+
+	pub async fn request(&mut self, req: Request) -> anyhow::Result<()> {
+		let req = match cast_request::<CodeActionRequest>(req) {
+			Ok((id, params)) => {
+				let action = self.code_action(params).await?;
+				send_response::<CodeActionRequest>(&self.connection, id, action)?;
+				return Ok(());
+			},
+			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(ExtractError::MethodMismatch(req)) => req,
+		};
+		eprintln!("unknown request: {:?}", req);
+		Ok(())
+	}
+
+	async fn code_action(
+		&self,
+		params: CodeActionParams,
+	) -> anyhow::Result<Option<CodeActionResponse>> {
+		let mut action = CodeActionResponse::new();
+
+		let Some(diagnostic) = params.context.diagnostics.last() else {
+			return Ok(None);
+		};
+		let Some(data) = &diagnostic.data else {
+			return Ok(None);
+		};
+
+		let replacements = match serde_json::from_value::<Vec<String>>(data.clone()) {
+			Ok(r) => r,
+			Err(err) => {
+				eprintln!("{}", err);
+				return Ok(None);
+			},
+		};
+
+		for (i, value) in replacements.into_iter().enumerate() {
+			let title = format!("Replace with \"{}\"", value);
+			let replace = TextEdit { range: diagnostic.range, new_text: value };
+			let edit = [(params.text_document.uri.clone(), vec![replace])]
+				.into_iter()
+				.collect();
+
+			action.push(
+				CodeAction {
+					title,
+					is_preferred: Some(i == 0),
+					kind: Some(CodeActionKind::QUICKFIX),
+					diagnostics: Some(params.context.diagnostics.clone()),
+					edit: Some(WorkspaceEdit {
+						changes: Some(edit),
+						..Default::default()
+					}),
+					command: None,
+					disabled: None,
+					data: None,
+				}
+				.into(),
+			);
+		}
+		Ok(Some(action))
+	}
+
+	pub async fn notification(&mut self, not: Notification) -> anyhow::Result<()> {
+		let not = match cast_notification::<DidChangeTextDocument>(not) {
+			Ok(params) => return self.file_change(params).await,
+			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(ExtractError::MethodMismatch(not)) => not,
+		};
+		let not = match cast_notification::<DidSaveTextDocument>(not) {
+			Ok(params) => return self.file_save(params).await,
+			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(ExtractError::MethodMismatch(not)) => not,
+		};
+		let not = match cast_notification::<DidOpenTextDocument>(not) {
+			Ok(params) => return self.file_open(params).await,
+			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(ExtractError::MethodMismatch(not)) => not,
+		};
+		let not = match cast_notification::<DidCloseTextDocument>(not) {
+			Ok(params) => return self.file_close(params).await,
+			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(ExtractError::MethodMismatch(not)) => not,
+		};
+		let not = match cast_notification::<DidChangeConfiguration>(not) {
+			Ok(params) => return self.config_change(params).await,
+			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(ExtractError::MethodMismatch(not)) => not,
+		};
+		let not = match cast_notification::<Cancel>(not) {
+			Ok(_params) => return Ok(()),
+			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(ExtractError::MethodMismatch(not)) => not,
+		};
+		let not = match cast_notification::<SetTrace>(not) {
+			Ok(_params) => return Ok(()),
+			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(ExtractError::MethodMismatch(not)) => not,
+		};
+		eprintln!("unknown notification: {:?}", not);
+		Ok(())
+	}
+
+	async fn file_save(&mut self, params: DidSaveTextDocumentParams) -> anyhow::Result<()> {
+		let path = params.text_document.uri.to_file_path().unwrap();
+		eprintln!("Save {}", path.display());
+
+		if self.connection.receiver.is_empty().not() {
+			eprintln!("Skipping {}", path.display());
+			return Ok(());
+		}
+
+		let diagnostics = match self.get_diagnostics(&path).await {
+			Ok(d) => d,
+			Err(err) => {
+				eprintln!("{:?}", err);
+				return Ok(());
+			},
+		};
+
+		let params = PublishDiagnosticsParams {
+			uri: params.text_document.uri,
+			version: None,
+			diagnostics,
+		};
+		send_notification::<PublishDiagnostics>(&self.connection, params)?;
+		return Ok(());
+	}
+
+	async fn file_open(&mut self, params: DidOpenTextDocumentParams) -> anyhow::Result<()> {
+		let path = &params.text_document.uri.to_file_path().unwrap();
+		eprintln!("Open {}", path.display());
+		self.world.use_shadow_file(path, params.text_document.text);
+		if self.connection.receiver.is_empty().not() {
+			eprintln!("Skipping {}", path.display());
+			return Ok(());
+		}
+
+		eprintln!("Checking: {}", path.display());
+
+		let diagnostics = match self.get_diagnostics(&path).await {
+			Ok(d) => d,
+			Err(err) => {
+				eprintln!("{:?}", err);
+				return Ok(());
+			},
+		};
+
+		let params = PublishDiagnosticsParams {
+			uri: params.text_document.uri,
+			version: None,
+			diagnostics,
+		};
+		send_notification::<PublishDiagnostics>(&self.connection, params)?;
+
+		Ok(())
+	}
+
+	async fn file_close(&mut self, params: DidCloseTextDocumentParams) -> anyhow::Result<()> {
+		let path = &params.text_document.uri.to_file_path().unwrap();
+		eprintln!("Close {}", path.display());
+		self.world.use_original_file(&path);
+		Ok(())
+	}
+
+	async fn file_change(&mut self, params: DidChangeTextDocumentParams) -> anyhow::Result<()> {
+		let path = params.text_document.uri.to_file_path().unwrap();
+		eprintln!("Change {}", path.display());
+		let source = self.world.shadow_file(&path).unwrap();
+
+		for change in &params.content_changes {
+			if let Some(range) = change.range {
+				let start = source
+					.line_column_to_byte(range.start.line as usize, range.start.character as usize)
+					.unwrap();
+				let end = source
+					.line_column_to_byte(range.end.line as usize, range.end.character as usize)
+					.unwrap();
+				source.edit(start..end, &change.text);
+			} else {
+				source.replace(&change.text);
+			}
+		}
+
+		if self.options.on_change.not() {
+			return Ok(());
+		}
+		let update = params.content_changes.iter().any(|change| {
+			change.text.is_empty() || change.text.chars().any(|c| c.is_alphanumeric().not())
+		});
+
+		if update.not() {
+			return Ok(());
+		}
+
+		if self.connection.receiver.is_empty().not() {
+			eprintln!("Skipping {}", path.display());
+			return Ok(());
+		}
+
+		eprintln!("Checking: {}", path.display());
+
+		let diagnostics = match self.get_diagnostics(&path).await {
+			Ok(d) => d,
+			Err(err) => {
+				eprintln!("{:?}", err);
+				return Ok(());
+			},
+		};
+
+		let params = PublishDiagnosticsParams {
+			uri: params.text_document.uri,
+			version: None,
+			diagnostics,
+		};
+		send_notification::<PublishDiagnostics>(&self.connection, params)?;
+		Ok(())
+	}
+
+	async fn config_change(&mut self, params: DidChangeConfigurationParams) -> anyhow::Result<()> {
+		self.options = match serde_ignored::deserialize::<_, _, Options>(params.settings, |path| {
+			eprintln!("Unknown option {}", path);
+		}) {
+			Ok(o) => o,
+			Err(err) => {
+				eprintln!("{}", err);
+				return Ok(());
+			},
+		};
+
+		self.lt = match self.options.create_lt().await {
+			Ok(lt) => lt,
+			Err(err) => {
+				eprintln!("{}", err);
+				return Ok(());
+			},
+		};
+		Ok(())
+	}
+
+	async fn get_diagnostics(&mut self, path: &Path) -> anyhow::Result<Vec<Diagnostic>> {
+		let Some(doc) = self.world.compile() else {
+			eprintln!("TODO: Warning could not compile");
+			return Ok(Vec::new());
+		};
+
+		let file_id = self.world.file_id(path);
+		let paragraphs =
+			typst_languagetool::convert::document(&doc, self.options.chunk_size, file_id);
+		let mut collector = typst_languagetool::FileCollector::new(file_id, &self.world);
+		let mut next_cache = Cache::new();
+		let l = paragraphs.len();
+		for (idx, (text, mapping)) in paragraphs.into_iter().enumerate() {
+			let suggestions = if let Some(suggestions) = self.cache.get(&text) {
+				suggestions
+			} else {
+				eprintln!("Checking {}/{}", idx + 1, l);
+				self.lt.check_text(&text).await?
+			};
+			collector.add(&suggestions, mapping);
+			next_cache.insert(text, suggestions);
+		}
+		self.cache = next_cache;
+		eprintln!("Generating diagnostics");
+
+		let (source, diagnostics) = collector.finish();
+
+		let diagnostics = diagnostics
+			.into_iter()
+			.map(|diagnostic| {
+				let (start_line, start_column) =
+					byte_to_position(&source, diagnostic.locations[0].start);
+				let (end_line, end_column) = byte_to_position(&source, diagnostic.locations[0].end);
+
+				Diagnostic {
+					range: Range {
+						start: lsp_types::Position {
+							line: start_line as u32,
+							character: start_column as u32,
+						},
+						end: lsp_types::Position {
+							line: end_line as u32,
+							character: end_column as u32,
+						},
+					},
+					severity: Some(DiagnosticSeverity::INFORMATION),
+					code: Some(NumberOrString::String(diagnostic.rule_id)),
+					code_description: None,
+					source: None,
+					message: diagnostic.message,
+					related_information: None,
+					tags: None,
+					data: serde_json::to_value(diagnostic.replacements).ok(),
+				}
+			})
+			.collect();
+
+		Ok(diagnostics)
+	}
+}
+
+fn cast_request<R>(req: Request) -> Result<(RequestId, R::Params), ExtractError<Request>>
+where
+	R: lsp_types::request::Request,
+	R::Params: serde::de::DeserializeOwned,
+{
+	req.extract(R::METHOD)
+}
+
+fn cast_notification<N>(not: Notification) -> Result<N::Params, ExtractError<Notification>>
+where
+	N: lsp_types::notification::Notification,
+	N::Params: serde::de::DeserializeOwned,
+{
+	not.extract(N::METHOD)
+}
+
+#[allow(dead_code)]
+fn send_request<R>(connection: &Connection, id: i32, params: R::Params) -> anyhow::Result<()>
+where
+	R: lsp_types::request::Request,
+{
+	let message = Message::Request(Request::new(id.into(), R::METHOD.into(), params));
+	connection.sender.send(message)?;
+
+	Ok(())
+}
+
+fn send_response<R>(connection: &Connection, id: RequestId, result: R::Result) -> anyhow::Result<()>
+where
+	R: lsp_types::request::Request,
+{
+	let message = Message::Response(Response::new_ok(id, result));
+	connection.sender.send(message)?;
+	Ok(())
+}
+
+fn send_notification<N>(connection: &Connection, params: N::Params) -> anyhow::Result<()>
+where
+	N: lsp_types::notification::Notification,
+{
+	let message = Message::Notification(Notification::new(N::METHOD.into(), params));
+	connection.sender.send(message)?;
+	Ok(())
+}
+
+fn make_absolute(cwd: &Path, path: &mut Option<PathBuf>) {
+	if let Some(path) = path {
+		if path.is_absolute() {
+			return;
+		}
+		*path = cwd.join(&path)
+	}
+}
+
 #[derive(Debug)]
 struct Cache {
 	cache: HashMap<String, Vec<Suggestion>>,
@@ -411,69 +545,6 @@ impl Cache {
 	}
 }
 
-async fn get_diagnostics(
-	path: &Path,
-	lt: &LanguageTool,
-	world: &LtWorld,
-	cache: &mut Cache,
-	chunk_size: usize,
-) -> anyhow::Result<Vec<Diagnostic>> {
-	let Some(doc) = world.compile() else {
-		eprintln!("TODO: Warning could not compile");
-		return Ok(Vec::new());
-	};
-
-	let paragraphs = typst_languagetool::convert::document(&doc, chunk_size);
-	let file_id = world.file_id(path);
-	let mut collector = typst_languagetool::FileCollector::new(file_id, world);
-	let mut next_cache = Cache::new();
-	let l = paragraphs.len();
-	for (idx, (text, mapping)) in paragraphs.into_iter().enumerate() {
-		let suggestions = if let Some(suggestions) = cache.get(&text) {
-			suggestions
-		} else {
-			eprintln!("Checking {}/{}", idx, l);
-			lt.check_text(&text).await?
-		};
-		collector.add(&suggestions, mapping);
-		next_cache.insert(text, suggestions);
-	}
-	*cache = next_cache;
-
-	let (source, diagnostics) = collector.finish();
-
-	let diagnostics = diagnostics
-		.into_iter()
-		.map(|diagnostic| {
-			let (start_line, start_column) =
-				byte_to_position(&source, diagnostic.locations[0].start);
-			let (end_line, end_column) = byte_to_position(&source, diagnostic.locations[0].end);
-
-			Diagnostic {
-				range: Range {
-					start: tower_lsp::lsp_types::Position {
-						line: start_line as u32,
-						character: start_column as u32,
-					},
-					end: tower_lsp::lsp_types::Position {
-						line: end_line as u32,
-						character: end_column as u32,
-					},
-				},
-				severity: Some(DiagnosticSeverity::INFORMATION),
-				code: Some(NumberOrString::String(diagnostic.rule_id)),
-				code_description: None,
-				source: None,
-				message: diagnostic.message,
-				related_information: None,
-				tags: None,
-				data: serde_json::to_value(diagnostic.replacements).ok(),
-			}
-		})
-		.collect();
-
-	Ok(diagnostics)
-}
 fn byte_to_position(source: &Source, index: usize) -> (usize, usize) {
 	let line = source.byte_to_line(index).unwrap();
 	let start = source.line_to_byte(line).unwrap();
