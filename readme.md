@@ -9,13 +9,38 @@ Spellcheck typst files with LanguageTool.
 1. check text with languagetool
 1. map results back to the source 
 
-## Disable Hyphenation
-
-- The text extraction can't handle hyphenation yet
-- With the line below the hyphenation can be disabled only for the spellchecker
+## Use special styling for spellchecking
 
 ```typst
-#set par(justify: not sys.inputs.at("spellcheck", default: false))
+// use styling for spellcheck only in the spellchecker
+// keep the correct styling in pdf or preview
+// should be called after the template
+#show: lt()
+
+// use styling for spellcheck in pdf or preview
+// should be called after the template
+#show: lt(overwrite: true) 
+
+#let lt(overwrite: false) = {
+	if not sys.inputs.at("spellcheck", default: overwrite) {
+		return (doc) => doc
+	}
+	return (doc) => {
+		show math.equation.where(block: false): it => [0]
+		show math.equation.where(block: true): it => []
+		show bibliography: it => []
+		show par: set par(justify: false, leading: 0.65em)
+		set page(height: auto)
+		show block: it => it.body
+		show page: set page(numbering: none)
+		show heading: it => if it.level <= 3 {
+			pagebreak() + it
+		} else {
+			it
+		}
+		doc
+	}
+}
 ```
 
 ## LanguageTool Backend
