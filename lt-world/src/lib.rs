@@ -31,15 +31,8 @@ pub struct LtWorld {
 
 impl LtWorld {
 	pub fn new(main: PathBuf, root: Option<PathBuf>) -> Self {
-		let root = if let Some(root) = root {
-			root
-		} else {
-			main.parent().unwrap().to_path_buf()
-		};
-
-		let main = main.strip_prefix(&root).unwrap();
-		let main = FileId::new(None, VirtualPath::new(main));
-
+		let root = root.unwrap_or_else(|| main.parent().unwrap().to_path_buf());
+		let main = VirtualPath::new(main.strip_prefix(&root).unwrap());
 		let mut inputs = Dict::new();
 		inputs.insert("spellcheck".into(), Value::Bool(true));
 
@@ -47,10 +40,16 @@ impl LtWorld {
 			library: Prehashed::new(Library::builder().with_inputs(inputs).build()),
 			now: chrono::Utc::now(),
 			font_manager: FontManager::new(),
-			main,
+			main: FileId::new(None, main),
 			root,
 			shadow_files: HashMap::new(),
 		}
+	}
+
+	pub fn update(&mut self, main: PathBuf, root: Option<PathBuf>) {
+		self.root = root.unwrap_or_else(|| main.parent().unwrap().to_path_buf());
+		let main = VirtualPath::new(main.strip_prefix(&self.root).unwrap());
+		self.main = FileId::new(None, main);
 	}
 
 	pub fn root(&self) -> &Path {

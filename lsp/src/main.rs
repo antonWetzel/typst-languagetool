@@ -1,7 +1,7 @@
 use std::collections::HashMap;
-use std::ops::Not;
 use std::path::{Path, PathBuf};
 
+use crossbeam_channel::RecvTimeoutError;
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::*;
 use lsp_types::request::*;
@@ -13,7 +13,7 @@ use typst_languagetool::{LanguageTool, LanguageToolBackend, Suggestion};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(default)]
-struct Options {
+struct InitOptions {
 	language: String,
 	dictionary: Vec<String>,
 	disabled_checks: Vec<String>,
@@ -24,14 +24,14 @@ struct Options {
 	port: Option<String>,
 
 	chunk_size: usize,
-	on_change: bool,
+	#[serde(with = "humantime_serde")]
+	on_change: Option<std::time::Duration>,
 
-	path: Option<PathBuf>,
 	root: Option<PathBuf>,
 	main: Option<PathBuf>,
 }
 
-impl Default for Options {
+impl Default for InitOptions {
 	fn default() -> Self {
 		Self {
 			language: "en-US".into(),
@@ -44,16 +44,15 @@ impl Default for Options {
 			port: None,
 
 			chunk_size: 1000,
-			on_change: false,
+			on_change: None,
 
-			path: None,
 			root: None,
 			main: None,
 		}
 	}
 }
 
-impl Options {
+impl InitOptions {
 	async fn create_lt(&self) -> anyhow::Result<LanguageTool> {
 		let mut lt = LanguageTool::new(
 			self.bundled,
@@ -65,6 +64,20 @@ impl Options {
 		lt.allow_words(&self.dictionary).await?;
 		lt.disable_checks(&self.disabled_checks).await?;
 		Ok(lt)
+	}
+
+	fn make_absolute(&mut self) {
+		fn make_absolute(cwd: &Path, path: &mut Option<PathBuf>) {
+			if let Some(path) = path {
+				if path.is_absolute() {
+					return;
+				}
+				*path = cwd.join(&path)
+			}
+		}
+		let cwd = std::env::current_dir().unwrap();
+		make_absolute(&cwd, &mut self.main);
+		make_absolute(&cwd, &mut self.root);
 	}
 }
 
@@ -100,7 +113,7 @@ async fn main() -> anyhow::Result<()> {
 			return Err(e.into());
 		},
 	};
-	let state = State::new(connection, initialization_params).await;
+	let state = State::new(connection, initialization_params).await?;
 	state.main_loop().await?;
 	io_threads.join()?;
 
@@ -108,16 +121,33 @@ async fn main() -> anyhow::Result<()> {
 	Ok(())
 }
 
+struct Options {
+	chunk_size: usize,
+	on_change: Option<std::time::Duration>,
+}
+
 struct State {
 	world: LtWorld,
-	options: Options,
 	cache: Cache,
 	lt: LanguageTool,
 	connection: Connection,
+	check: Option<CheckData>,
+	options: Options,
+}
+
+struct CheckData {
+	check_time: std::time::Instant,
+	url: Url,
+	path: PathBuf,
+}
+
+enum Action {
+	Message(Message),
+	Check(CheckData),
 }
 
 impl State {
-	pub async fn new(connection: Connection, params: Value) -> Self {
+	pub async fn new(connection: Connection, params: Value) -> anyhow::Result<Self> {
 		let mut options = (|| {
 			let params = serde_json::from_value::<InitializeParams>(params).ok()?;
 			let options = params.initialization_options?;
@@ -128,48 +158,79 @@ impl State {
 			.ok()?;
 			Some(options)
 		})()
-		.unwrap_or(Options::default());
-
-		let cwd = std::env::current_dir().unwrap();
-		make_absolute(&cwd, &mut options.path);
-		make_absolute(&cwd, &mut options.main);
-		make_absolute(&cwd, &mut options.root);
+		.unwrap_or(InitOptions::default());
 
 		let cache = Cache::new();
 
-		let lt = options.create_lt().await.unwrap();
-
-		let world = match (options.path.clone(), options.main.clone()) {
-			(_, Some(main)) => lt_world::LtWorld::new(main, options.root.clone()),
-			(Some(main), None) => lt_world::LtWorld::new(main, options.root.clone()),
-
-			_ => return Err(anyhow::anyhow!("Invalid typst settings.")).unwrap(),
+		options.make_absolute();
+		eprintln!("options: {:#?}", options);
+		let lt = options.create_lt().await?;
+		let Some(main) = &options.main else {
+			return Err(anyhow::anyhow!("main file is required")).unwrap();
 		};
 
-		eprintln!("Compiling document");
+		let world = lt_world::LtWorld::new(main.clone(), options.root);
+
+		eprintln!("compiling document");
 		if world.compile().is_none() {
-			eprintln!("Failed to compile init document");
+			eprintln!("failed to compile document");
 		};
 
-		Self { world, options, cache, lt, connection }
+		Ok(Self {
+			world,
+			cache,
+			lt,
+			connection,
+			check: None,
+
+			options: Options {
+				on_change: options.on_change,
+				chunk_size: options.chunk_size,
+			},
+		})
 	}
 
 	pub async fn main_loop(mut self) -> anyhow::Result<()> {
-		while let Ok(msg) = self.connection.receiver.recv() {
-			match msg {
-				Message::Request(req) => {
-					if self.connection.handle_shutdown(&req)? {
-						return Ok(());
-					}
-					self.request(req).await?;
-				},
-				Message::Response(resp) => {
-					eprintln!("unknown response: {:?}", resp);
-				},
-				Message::Notification(not) => self.notification(not).await?,
+		eprintln!("waiting for events");
+		loop {
+			match self.next_action()? {
+				Action::Message(msg) => self.message(msg).await?,
+				Action::Check(data) => self.check_change(&data.path, data.url).await?,
 			}
 		}
-		Ok(())
+	}
+
+	fn next_action(&mut self) -> anyhow::Result<Action> {
+		if let Some(last_change) = &self.check {
+			let msg = self
+				.connection
+				.receiver
+				.recv_deadline(last_change.check_time);
+			match msg {
+				Ok(msg) => Ok(Action::Message(msg)),
+				Err(RecvTimeoutError::Timeout) => Ok(Action::Check(self.check.take().unwrap())),
+				Err(err) => Err(err.into()),
+			}
+		} else {
+			let msg = self.connection.receiver.recv()?;
+			Ok(Action::Message(msg))
+		}
+	}
+
+	pub async fn message(&mut self, msg: Message) -> anyhow::Result<()> {
+		match msg {
+			Message::Request(req) => {
+				if self.connection.handle_shutdown(&req)? {
+					return Ok(());
+				}
+				self.request(req).await
+			},
+			Message::Response(resp) => {
+				eprintln!("unknown response: {:?}", resp);
+				Ok(())
+			},
+			Message::Notification(not) => self.notification(not).await,
+		}
 	}
 
 	pub async fn request(&mut self, req: Request) -> anyhow::Result<()> {
@@ -179,7 +240,7 @@ impl State {
 				send_response::<CodeActionRequest>(&self.connection, id, action)?;
 				return Ok(());
 			},
-			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(err @ ExtractError::JsonError { .. }) => return Err(err.into()),
 			Err(ExtractError::MethodMismatch(req)) => req,
 		};
 		eprintln!("unknown request: {:?}", req);
@@ -237,37 +298,37 @@ impl State {
 	pub async fn notification(&mut self, not: Notification) -> anyhow::Result<()> {
 		let not = match cast_notification::<DidChangeTextDocument>(not) {
 			Ok(params) => return self.file_change(params).await,
-			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(err @ ExtractError::JsonError { .. }) => return Err(err.into()),
 			Err(ExtractError::MethodMismatch(not)) => not,
 		};
 		let not = match cast_notification::<DidSaveTextDocument>(not) {
 			Ok(params) => return self.file_save(params).await,
-			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(err @ ExtractError::JsonError { .. }) => return Err(err.into()),
 			Err(ExtractError::MethodMismatch(not)) => not,
 		};
 		let not = match cast_notification::<DidOpenTextDocument>(not) {
 			Ok(params) => return self.file_open(params).await,
-			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(err @ ExtractError::JsonError { .. }) => return Err(err.into()),
 			Err(ExtractError::MethodMismatch(not)) => not,
 		};
 		let not = match cast_notification::<DidCloseTextDocument>(not) {
 			Ok(params) => return self.file_close(params).await,
-			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(err @ ExtractError::JsonError { .. }) => return Err(err.into()),
 			Err(ExtractError::MethodMismatch(not)) => not,
 		};
 		let not = match cast_notification::<DidChangeConfiguration>(not) {
 			Ok(params) => return self.config_change(params).await,
-			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(err @ ExtractError::JsonError { .. }) => return Err(err.into()),
 			Err(ExtractError::MethodMismatch(not)) => not,
 		};
 		let not = match cast_notification::<Cancel>(not) {
 			Ok(_params) => return Ok(()),
-			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(err @ ExtractError::JsonError { .. }) => return Err(err.into()),
 			Err(ExtractError::MethodMismatch(not)) => not,
 		};
 		let not = match cast_notification::<SetTrace>(not) {
 			Ok(_params) => return Ok(()),
-			Err(err @ ExtractError::JsonError { .. }) => panic!("{err:?}"),
+			Err(err @ ExtractError::JsonError { .. }) => return Err(err.into()),
 			Err(ExtractError::MethodMismatch(not)) => not,
 		};
 		eprintln!("unknown notification: {:?}", not);
@@ -277,55 +338,23 @@ impl State {
 	async fn file_save(&mut self, params: DidSaveTextDocumentParams) -> anyhow::Result<()> {
 		let path = params.text_document.uri.to_file_path().unwrap();
 		eprintln!("Save {}", path.display());
-
-		if self.connection.receiver.is_empty().not() {
-			eprintln!("Skipping {}", path.display());
-			return Ok(());
-		}
-
-		let diagnostics = match self.get_diagnostics(&path).await {
-			Ok(d) => d,
-			Err(err) => {
-				eprintln!("{:?}", err);
-				return Ok(());
-			},
-		};
-
-		let params = PublishDiagnosticsParams {
-			uri: params.text_document.uri,
-			version: None,
-			diagnostics,
-		};
-		send_notification::<PublishDiagnostics>(&self.connection, params)?;
-		return Ok(());
+		self.check = Some(CheckData {
+			check_time: std::time::Instant::now(),
+			url: params.text_document.uri,
+			path,
+		});
+		Ok(())
 	}
 
 	async fn file_open(&mut self, params: DidOpenTextDocumentParams) -> anyhow::Result<()> {
-		let path = &params.text_document.uri.to_file_path().unwrap();
+		let path = params.text_document.uri.to_file_path().unwrap();
 		eprintln!("Open {}", path.display());
-		self.world.use_shadow_file(path, params.text_document.text);
-		if self.connection.receiver.is_empty().not() {
-			eprintln!("Skipping {}", path.display());
-			return Ok(());
-		}
-
-		eprintln!("Checking: {}", path.display());
-
-		let diagnostics = match self.get_diagnostics(&path).await {
-			Ok(d) => d,
-			Err(err) => {
-				eprintln!("{:?}", err);
-				return Ok(());
-			},
-		};
-
-		let params = PublishDiagnosticsParams {
-			uri: params.text_document.uri,
-			version: None,
-			diagnostics,
-		};
-		send_notification::<PublishDiagnostics>(&self.connection, params)?;
-
+		self.world.use_shadow_file(&path, params.text_document.text);
+		self.check = Some(CheckData {
+			check_time: std::time::Instant::now(),
+			url: params.text_document.uri,
+			path,
+		});
 		Ok(())
 	}
 
@@ -355,25 +384,21 @@ impl State {
 			}
 		}
 
-		if self.options.on_change.not() {
+		let Some(duration) = self.options.on_change else {
 			return Ok(());
-		}
-		let update = params.content_changes.iter().any(|change| {
-			change.text.is_empty() || change.text.chars().any(|c| c.is_alphanumeric().not())
+		};
+		self.check = Some(CheckData {
+			check_time: std::time::Instant::now() + duration,
+			url: params.text_document.uri,
+			path,
 		});
+		Ok(())
+	}
 
-		if update.not() {
-			return Ok(());
-		}
-
-		if self.connection.receiver.is_empty().not() {
-			eprintln!("Skipping {}", path.display());
-			return Ok(());
-		}
-
+	async fn check_change(&mut self, path: &Path, url: Url) -> anyhow::Result<()> {
 		eprintln!("Checking: {}", path.display());
 
-		let diagnostics = match self.get_diagnostics(&path).await {
+		let diagnostics = match self.get_diagnostics(path).await {
 			Ok(d) => d,
 			Err(err) => {
 				eprintln!("{:?}", err);
@@ -381,33 +406,43 @@ impl State {
 			},
 		};
 
-		let params = PublishDiagnosticsParams {
-			uri: params.text_document.uri,
-			version: None,
-			diagnostics,
-		};
+		let params = PublishDiagnosticsParams { uri: url, version: None, diagnostics };
 		send_notification::<PublishDiagnostics>(&self.connection, params)?;
 		Ok(())
 	}
 
 	async fn config_change(&mut self, params: DidChangeConfigurationParams) -> anyhow::Result<()> {
-		self.options = match serde_ignored::deserialize::<_, _, Options>(params.settings, |path| {
-			eprintln!("Unknown option {}", path);
-		}) {
-			Ok(o) => o,
-			Err(err) => {
-				eprintln!("{}", err);
-				return Ok(());
-			},
-		};
+		let mut options =
+			match serde_ignored::deserialize::<_, _, InitOptions>(params.settings, |path| {
+				eprintln!("unknown option {}", path);
+			}) {
+				Ok(o) => o,
+				Err(err) => {
+					eprintln!("{}", err);
+					return Ok(());
+				},
+			};
 
-		self.lt = match self.options.create_lt().await {
+		options.make_absolute();
+		eprintln!("options: {:#?}", options);
+
+		self.lt = match options.create_lt().await {
 			Ok(lt) => lt,
 			Err(err) => {
 				eprintln!("{}", err);
 				return Ok(());
 			},
 		};
+
+		if let Some(main) = options.main {
+			self.world.update(main, options.root);
+		}
+
+		self.options = Options {
+			on_change: options.on_change,
+			chunk_size: options.chunk_size,
+		};
+
 		Ok(())
 	}
 
@@ -515,15 +550,6 @@ where
 	let message = Message::Notification(Notification::new(N::METHOD.into(), params));
 	connection.sender.send(message)?;
 	Ok(())
-}
-
-fn make_absolute(cwd: &Path, path: &mut Option<PathBuf>) {
-	if let Some(path) = path {
-		if path.is_absolute() {
-			return;
-		}
-		*path = cwd.join(&path)
-	}
 }
 
 #[derive(Debug)]
