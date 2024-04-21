@@ -14,20 +14,32 @@ use typst_languagetool::{LanguageTool, LanguageToolBackend, Suggestion};
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(default)]
 struct InitOptions {
+	/// Language Code like "en-US"
 	language: String,
+	/// Additional allowed words
 	dictionary: Vec<String>,
+	/// Languagetool rules to ignore (WHITESPACE_RULE, ...)
 	disabled_checks: Vec<String>,
 
+	/// use bundled languagetool
 	bundled: bool,
+	/// use external JAR for languagetool
 	jar_location: Option<String>,
+	/// host for remote languagetool
 	host: Option<String>,
+	/// port for remote languagetool
 	port: Option<String>,
 
+	/// Size for chunk send to LanguageTool
 	chunk_size: usize,
+	/// Duration to wait for additional changes before checking the file
+	/// Leave empty to only check on open and save
 	#[serde(with = "humantime_serde")]
 	on_change: Option<std::time::Duration>,
 
+	/// Project Root
 	root: Option<PathBuf>,
+	/// Project Main File
 	main: Option<PathBuf>,
 }
 
