@@ -1,0 +1,30 @@
+{
+    "[typst]": {
+        "editor.wordWrap": "on",
+        "editor.semanticHighlighting.enabled": true,
+        "editor.tabSize": 4
+    },
+    "generic-lsp.configuration": [
+        {
+            "language": "typst",
+            "lsp": "typst-languagetool-lsp",
+            "options": {
+                "bundled": true,
+                // "host": "http://127.0.0.1",
+                // "port": "8081",
+                "main": "./main.typ",
+                "root": ".",
+                "on_change": "1000ms",
+                "dictionary": {
+                    "de-DE": [
+                        "Wowow"
+                    ],
+                },
+                "disabled_checks": {},
+                "languages": [
+                    "en-US",
+                ]
+            }
+        }
+    ]
+}

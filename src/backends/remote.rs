@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use languagetool_rust::{check::Match, CheckRequest, ServerClient};
 
@@ -6,51 +6,53 @@ use crate::{LanguageToolBackend, Suggestion};
 
 #[derive(Debug)]
 pub struct LanguageToolRemote {
-	lang: String,
 	server_client: ServerClient,
-	disabled_categories: Option<Vec<String>>,
-	allowed_words: Option<HashSet<String>>,
+	disabled_categories: HashMap<String, Vec<String>>,
+	allowed_words: HashMap<String, HashSet<String>>,
 }
 
 impl LanguageToolRemote {
-	pub fn new(hostname: &str, port: &str, lang: &str) -> anyhow::Result<Self> {
+	pub fn new(hostname: &str, port: &str) -> anyhow::Result<Self> {
 		let server_client = ServerClient::new(hostname, port);
 		Ok(Self {
 			server_client,
-			lang: lang.into(),
-			disabled_categories: None,
-			allowed_words: None,
+			disabled_categories: HashMap::new(),
+			allowed_words: HashMap::new(),
 		})
 	}
 }
 
 impl LanguageToolBackend for LanguageToolRemote {
-	async fn allow_words(&mut self, words: &[String]) -> anyhow::Result<()> {
-		self.allowed_words = Some(words.iter().map(|x| x.clone()).collect());
+	async fn allow_words(&mut self, lang: String, words: &[String]) -> anyhow::Result<()> {
+		self.allowed_words
+			.insert(lang, words.iter().map(|x| x.clone()).collect());
 		Ok(())
 	}
 
-	async fn change_language(&mut self, lang: &str) -> anyhow::Result<()> {
-		self.lang = lang.into();
+	async fn disable_checks(&mut self, lang: String, checks: &[String]) -> anyhow::Result<()> {
+		self.disabled_categories
+			.insert(lang, checks.iter().map(|x| x.clone()).collect());
 		Ok(())
 	}
 
-	async fn disable_checks(&mut self, checks: &[String]) -> anyhow::Result<()> {
-		self.disabled_categories = Some(checks.iter().map(|x| x.clone()).collect());
-		Ok(())
-	}
+	async fn check_text(
+		&mut self,
+		lang: String,
+		text: &str,
+	) -> anyhow::Result<Vec<crate::Suggestion>> {
+		let disabled_rules = self.disabled_categories.get(&lang).map(|x| x.clone());
+		let allowed = self.allowed_words.get(&lang);
 
-	async fn check_text(&self, text: &str) -> anyhow::Result<Vec<crate::Suggestion>> {
 		let mut req = CheckRequest::default()
 			.with_text(String::from(text))
-			.with_language(self.lang.clone());
-		req.disabled_rules = self.disabled_categories.clone();
+			.with_language(lang);
+		req.disabled_rules = disabled_rules;
 
 		let response = self.server_client.check(&req).await?;
 
 		let mut suggestions = Vec::with_capacity(response.matches.len());
 		for m in response.matches {
-			if let Some(allowed) = &self.allowed_words {
+			if let Some(allowed) = allowed {
 				if filter_match(&m, allowed) {
 					continue;
 				}

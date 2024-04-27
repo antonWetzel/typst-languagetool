@@ -4,13 +4,15 @@ use typst::{
 	layout::{Abs, Em, Point},
 	model::Document,
 	syntax::{FileId, Source, Span, SyntaxKind},
-	text::TextItem,
+	text::{Lang, TextItem},
 };
 
 use crate::Suggestion;
 
+#[derive(Debug)]
 pub struct Mapping {
 	chars: Vec<(Span, Range<u16>)>,
+	language: Lang,
 }
 
 impl Mapping {
@@ -42,20 +44,56 @@ impl Mapping {
 				}
 			}
 		}
+
 		locations
 	}
+
+	pub fn short_language(&self) -> &str {
+		self.language.as_str()
+	}
+
+	// https://languagetool.org/http-api/swagger-ui/#!/default/get_languages
+	// defaults to european region codes (maybe).
+	// todo: default to highest population.
+	pub fn long_language(&self) -> String {
+		match self.language {
+			Lang::FRENCH => "fr-FR".into(),
+			Lang::SWEDISH => "sv-SE".into(),
+			Lang::ITALIAN => "it-IT".into(),
+			Lang::SPANISH => "es-ES".into(),
+			Lang::DUTCH => "nl-NL".into(),
+			Lang::CHINESE => "zh-CN".into(),
+			Lang::UKRAINIAN => "uk-UA".into(),
+			Lang::SLOVENIAN => "sl-SI".into(),
+			Lang::RUSSIAN => "ru-RU".into(),
+			Lang::ROMANIAN => "ro-RO".into(),
+			Lang::POLISH => "pl-PL".into(),
+			Lang::JAPANESE => "ja-JP".into(),
+			Lang::GREEK => "el-GR".into(),
+			Lang::DANISH => "da-DK".into(),
+			Lang::CATALAN => "ca-ES".into(),
+			Lang::PORTUGUESE => "pt-PT".into(),
+			Lang::ENGLISH => "en-GB".into(),
+			Lang::GERMAN => "de-DE".into(),
+			lang @ _ => lang.as_str().into(),
+		}
+	}
 }
+
 const LINE_SPACING: Em = Em::new(0.65);
 
 pub fn document(doc: &Document, chunk_size: usize, file_id: FileId) -> Vec<(String, Mapping)> {
 	let mut res = Vec::new();
 
 	for page in &doc.pages {
-		let mut converter = Converter::new(chunk_size);
+		let mut converter = Converter::new(chunk_size, Lang::ENGLISH);
 		converter.frame(&page.frame, Point::zero(), &mut res, file_id);
 		if converter.contains_file {
 			res.push((converter.text, converter.mapping));
 		}
+	}
+	for (text, mapping) in &res {
+		eprintln!("{} {}", mapping.language.as_str(), text);
 	}
 	res
 }
@@ -71,10 +109,10 @@ struct Converter {
 }
 
 impl Converter {
-	fn new(chunk_size: usize) -> Self {
+	fn new(chunk_size: usize, language: Lang) -> Self {
 		Self {
 			text: String::new(),
-			mapping: Mapping { chars: Vec::new() },
+			mapping: Mapping { chars: Vec::new(), language },
 			x: Abs::zero(),
 			y: Abs::zero(),
 			span: (Span::detached(), 0),
@@ -89,12 +127,19 @@ impl Converter {
 	}
 
 	fn seperate(&mut self, res: &mut Vec<(String, Mapping)>) {
+		let language = self.mapping.language;
 		if self.contains_file {
 			let text = std::mem::take(&mut self.text);
-			let mapping = std::mem::replace(&mut self.mapping, Mapping { chars: Vec::new() });
+			let mapping = std::mem::replace(
+				&mut self.mapping,
+				Mapping {
+					chars: Vec::new(),
+					language: Lang::ENGLISH,
+				},
+			);
 			res.push((text, mapping));
 		}
-		*self = Converter::new(self.chunk_size);
+		*self = Converter::new(self.chunk_size, language);
 	}
 
 	fn insert_parbreak(&mut self, res: &mut Vec<(String, Mapping)>) {
@@ -148,6 +193,11 @@ impl Converter {
 		match item {
 			I::Group(g) => self.frame(&g.frame, pos, res, file_id),
 			I::Text(t) => {
+				if self.mapping.language != t.lang {
+					self.seperate(res);
+				}
+				self.mapping.language = t.lang;
+
 				self.whitespace(t, pos, res);
 				self.x = pos.x + t.width();
 				self.y = pos.y;

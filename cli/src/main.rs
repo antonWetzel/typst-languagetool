@@ -37,10 +37,6 @@ struct Args {
 	#[clap(short, long, default_value = None)]
 	main: Option<PathBuf>,
 
-	/// Document Language ("de-DE", "en-US", ...).
-	#[clap(short, long, default_value = "en-US")]
-	language: String,
-
 	/// Delay for file changes.
 	#[clap(long, default_value_t = 0.1, id = "SECONDS")]
 	delay: f64,
@@ -52,14 +48,6 @@ struct Args {
 	/// Print results without annotations for easy regex evaluation.
 	#[clap(long, default_value_t = false)]
 	plain: bool,
-
-	/// Path to dictionary file.
-	#[clap(short, long, default_value = None)]
-	dictionary: Option<PathBuf>,
-
-	/// Languagetool Rule ID to ignore.
-	#[clap(long = "disabled-check", id = "ID")]
-	disabled_checks: Vec<String>,
 
 	/// Use bundled languagetool jar.
 	#[clap(long, default_value_t = false)]
@@ -82,12 +70,11 @@ struct Args {
 async fn main() -> anyhow::Result<()> {
 	let args = Args::parse();
 
-	let mut lt = LanguageTool::new(
+	let lt = LanguageTool::new(
 		args.bundled,
 		args.jar_location.as_ref(),
 		args.host.as_ref(),
 		args.port.as_ref(),
-		&args.language,
 	)?;
 
 	let world = match (args.path.clone(), args.main.clone()) {
@@ -97,15 +84,15 @@ async fn main() -> anyhow::Result<()> {
 		_ => return Err(anyhow::anyhow!("Invalid typst settings.")),
 	};
 
-	if let Some(path) = &args.dictionary {
-		let content = std::fs::read_to_string(path)?;
-		let words = content
-			.lines()
-			.map(|line| String::from(line))
-			.collect::<Vec<_>>();
-		lt.allow_words(&words).await?;
-	}
-	lt.disable_checks(&args.disabled_checks).await?;
+	// if let Some(path) = &args.dictionary {
+	// 	let content = std::fs::read_to_string(path)?;
+	// 	let words = content
+	// 		.lines()
+	// 		.map(|line| String::from(line))
+	// 		.collect::<Vec<_>>();
+	// 	lt.allow_words(&words).await?;
+	// }
+	// lt.disable_checks(&args.disabled_checks).await?;
 
 	match args.task {
 		Task::Check => check(args, lt, world).await?,
@@ -159,7 +146,7 @@ async fn watch(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::
 
 async fn handle_file(
 	path: &Path,
-	lt: &LanguageTool,
+	lt: &mut LanguageTool,
 	args: &Args,
 	world: &LtWorld,
 	chunk_size: usize,
@@ -179,10 +166,11 @@ async fn handle_file(
 	let mut collector = typst_languagetool::FileCollector::new(file_id, world);
 	let mut next_cache = Cache::new();
 	for (text, mapping) in paragraphs {
+		let lang = mapping.long_language();
 		let suggestions = if let Some(suggestions) = cache.get(&text) {
 			suggestions
 		} else {
-			lt.check_text(&text).await?
+			lt.check_text(lang, &text).await?
 		};
 
 		collector.add(&suggestions, mapping);

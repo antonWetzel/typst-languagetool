@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
+use anyhow::Context;
 use crossbeam_channel::RecvTimeoutError;
 use lsp_server::{Connection, ExtractError, Message, Notification, Request, RequestId, Response};
 use lsp_types::notification::*;
@@ -14,12 +15,12 @@ use typst_languagetool::{LanguageTool, LanguageToolBackend, Suggestion};
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
 #[serde(default)]
 struct InitOptions {
-	/// Language Code like "en-US"
-	language: String,
 	/// Additional allowed words
-	dictionary: Vec<String>,
+	dictionary: HashMap<String, Vec<String>>,
 	/// Languagetool rules to ignore (WHITESPACE_RULE, ...)
-	disabled_checks: Vec<String>,
+	disabled_checks: HashMap<String, Vec<String>>,
+
+	languages: Vec<String>,
 
 	/// use bundled languagetool
 	bundled: bool,
@@ -46,9 +47,9 @@ struct InitOptions {
 impl Default for InitOptions {
 	fn default() -> Self {
 		Self {
-			language: "en-US".into(),
-			dictionary: Vec::new(),
-			disabled_checks: Vec::new(),
+			dictionary: HashMap::new(),
+			disabled_checks: HashMap::new(),
+			languages: Vec::new(),
 
 			bundled: false,
 			jar_location: None,
@@ -64,6 +65,13 @@ impl Default for InitOptions {
 	}
 }
 
+fn create_language_map(codes: Vec<String>) -> HashMap<String, String> {
+	codes
+		.into_iter()
+		.map(|lang| (lang.split('-').next().unwrap_or("").to_owned(), lang))
+		.collect()
+}
+
 impl InitOptions {
 	async fn create_lt(&self) -> anyhow::Result<LanguageTool> {
 		let mut lt = LanguageTool::new(
@@ -71,10 +79,13 @@ impl InitOptions {
 			self.jar_location.as_ref(),
 			self.host.as_ref(),
 			self.port.as_ref(),
-			&self.language,
 		)?;
-		lt.allow_words(&self.dictionary).await?;
-		lt.disable_checks(&self.disabled_checks).await?;
+		for (lang, dict) in &self.dictionary {
+			lt.allow_words(lang.clone(), dict).await?;
+		}
+		for (lang, checks) in &self.disabled_checks {
+			lt.disable_checks(lang.clone(), checks).await?;
+		}
 		Ok(lt)
 	}
 
@@ -136,6 +147,7 @@ async fn main() -> anyhow::Result<()> {
 struct Options {
 	chunk_size: usize,
 	on_change: Option<std::time::Duration>,
+	language_codes: HashMap<String, String>,
 }
 
 struct State {
@@ -160,17 +172,12 @@ enum Action {
 
 impl State {
 	pub async fn new(connection: Connection, params: Value) -> anyhow::Result<Self> {
-		let mut options = (|| {
-			let params = serde_json::from_value::<InitializeParams>(params).ok()?;
-			let options = params.initialization_options?;
+		let params = serde_json::from_value::<InitializeParams>(params)?;
+		let options = params.initialization_options.context("No init options")?;
 
-			let options = serde_ignored::deserialize(options, |path| {
-				eprintln!("unknown option: {}", path);
-			})
-			.ok()?;
-			Some(options)
-		})()
-		.unwrap_or(InitOptions::default());
+		let mut options = serde_ignored::deserialize::<_, _, InitOptions>(options, |path| {
+			eprintln!("unknown option: {}", path);
+		})?;
 
 		let cache = Cache::new();
 
@@ -198,6 +205,7 @@ impl State {
 			options: Options {
 				on_change: options.on_change,
 				chunk_size: options.chunk_size,
+				language_codes: create_language_map(options.languages),
 			},
 		})
 	}
@@ -453,6 +461,7 @@ impl State {
 		self.options = Options {
 			on_change: options.on_change,
 			chunk_size: options.chunk_size,
+			language_codes: create_language_map(options.languages),
 		};
 
 		Ok(())
@@ -471,11 +480,17 @@ impl State {
 		let mut next_cache = Cache::new();
 		let l = paragraphs.len();
 		for (idx, (text, mapping)) in paragraphs.into_iter().enumerate() {
+			let lang = self
+				.options
+				.language_codes
+				.get(mapping.short_language())
+				.map(|x| x.clone())
+				.unwrap_or(mapping.long_language());
 			let suggestions = if let Some(suggestions) = self.cache.get(&text) {
 				suggestions
 			} else {
 				eprintln!("Checking {}/{}", idx + 1, l);
-				self.lt.check_text(&text).await?
+				self.lt.check_text(lang, &text).await?
 			};
 			collector.add(&suggestions, mapping);
 			next_cache.insert(text, suggestions);

@@ -1,4 +1,7 @@
-use std::ops::Not;
+use std::{
+	collections::{hash_map::Entry, HashMap},
+	ops::Not,
+};
 
 use jni::{
 	objects::{GlobalRef, JObject, JValue},
@@ -10,7 +13,7 @@ use crate::{LanguageToolBackend, Suggestion};
 #[derive(Debug)]
 pub struct LanguageToolJNI {
 	jvm: JavaVM,
-	lang_tool: GlobalRef,
+	languages: HashMap<String, GlobalRef>,
 }
 
 fn new_jvm(class_path: &str) -> anyhow::Result<JavaVM> {
@@ -23,13 +26,12 @@ fn new_jvm(class_path: &str) -> anyhow::Result<JavaVM> {
 }
 
 impl LanguageToolJNI {
-	pub fn new(class_path: &str, lang: &str) -> anyhow::Result<Self> {
+	pub fn new(class_path: &str) -> anyhow::Result<Self> {
 		let jvm = new_jvm(class_path)?;
-		let lang_tool = Self::create_lang_tool(lang, &jvm)?;
-		Ok(Self { lang_tool, jvm })
+		Ok(Self { languages: HashMap::new(), jvm })
 	}
 
-	pub fn new_bundled(lang: &str) -> anyhow::Result<Self> {
+	pub fn new_bundled() -> anyhow::Result<Self> {
 		#[cfg(feature = "bundle-jar")]
 		let path = include!(concat!(env!("OUT_DIR"), "./jar_path.rs"));
 
@@ -37,28 +39,24 @@ impl LanguageToolJNI {
 		let path = Err(anyhow::anyhow!("Feature 'bundle-jar' not enabled."))?;
 
 		let jvm = new_jvm(path)?;
-		let lang_tool = Self::create_lang_tool(lang, &jvm)?;
-		Ok(Self { lang_tool, jvm })
+		Ok(Self { languages: HashMap::new(), jvm })
 	}
 
-	fn create_lang_tool(lang: &str, jvm: &JavaVM) -> anyhow::Result<GlobalRef> {
-		let lang_tool = {
-			let mut guard = jvm.attach_current_thread()?;
-			let lang_code = guard.new_string(lang)?;
-			let lang = guard.call_static_method(
-				"org/languagetool/Languages",
-				"getLanguageForShortCode",
-				"(Ljava/lang/String;)Lorg/languagetool/Language;",
-				&[JValue::Object(&lang_code)],
-			)?;
+	fn create_lang_tool(lang: String, env: &mut JNIEnv) -> anyhow::Result<GlobalRef> {
+		let lang_code = env.new_string(lang)?;
+		let lang = env.call_static_method(
+			"org/languagetool/Languages",
+			"getLanguageForShortCode",
+			"(Ljava/lang/String;)Lorg/languagetool/Language;",
+			&[JValue::Object(&lang_code)],
+		)?;
 
-			let lang_tool = guard.new_object(
-				"org/languagetool/JLanguageTool",
-				"(Lorg/languagetool/Language;)V",
-				&[lang.borrow()],
-			)?;
-			guard.new_global_ref(lang_tool)?
-		};
+		let lang_tool = env.new_object(
+			"org/languagetool/JLanguageTool",
+			"(Lorg/languagetool/Language;)V",
+			&[lang.borrow()],
+		)?;
+		let lang_tool = env.new_global_ref(lang_tool)?;
 
 		Ok(lang_tool)
 	}
@@ -135,27 +133,26 @@ impl LanguageToolJNI {
 }
 
 impl LanguageToolBackend for LanguageToolJNI {
-	async fn change_language(&mut self, lang: &str) -> anyhow::Result<()> {
-		self.lang_tool = Self::create_lang_tool(lang, &self.jvm)?;
-		Ok(())
-	}
-
-	async fn check_text(&self, text: &str) -> anyhow::Result<Vec<Suggestion>> {
+	async fn check_text(&mut self, lang: String, text: &str) -> anyhow::Result<Vec<Suggestion>> {
 		let mut guard = self.jvm.attach_current_thread()?;
 		let text = guard.new_string(text)?;
-		let suggestions = Self::lt_request(&self.lang_tool, &text, &mut guard)?;
+		let lang_tool = match self.languages.entry(lang.clone()) {
+			Entry::Occupied(entry) => entry.into_mut(),
+			Entry::Vacant(entry) => entry.insert(Self::create_lang_tool(lang, &mut guard)?),
+		};
+		let suggestions = Self::lt_request(lang_tool, &text, &mut guard)?;
 		Ok(suggestions)
 	}
 
-	async fn allow_words(&mut self, words: &[String]) -> anyhow::Result<()> {
+	async fn allow_words(&mut self, lang: String, words: &[String]) -> anyhow::Result<()> {
 		let mut guard = self.jvm.attach_current_thread()?;
+		let lang_tool = match self.languages.entry(lang.clone()) {
+			Entry::Occupied(entry) => entry.into_mut(),
+			Entry::Vacant(entry) => entry.insert(Self::create_lang_tool(lang, &mut guard)?),
+		};
+
 		let rules = guard
-			.call_method(
-				&self.lang_tool,
-				"getAllActiveRules",
-				"()Ljava/util/List;",
-				&[],
-			)?
+			.call_method(lang_tool, "getAllActiveRules", "()Ljava/util/List;", &[])?
 			.l()?;
 		let list = guard.get_list(&rules)?;
 		let args = guard.new_object("java/util/ArrayList", "()V", &[])?;
@@ -186,7 +183,7 @@ impl LanguageToolBackend for LanguageToolJNI {
 		Ok(())
 	}
 
-	async fn disable_checks(&mut self, checks: &[String]) -> anyhow::Result<()> {
+	async fn disable_checks(&mut self, lang: String, checks: &[String]) -> anyhow::Result<()> {
 		let mut guard = self.jvm.attach_current_thread()?;
 		let args = guard.new_object("java/util/ArrayList", "()V", &[])?;
 		let args = guard.get_list(&args)?;
@@ -194,9 +191,12 @@ impl LanguageToolBackend for LanguageToolJNI {
 			let check = guard.new_string(check)?;
 			args.add(&mut guard, &check)?;
 		}
-
+		let lang_tool = match self.languages.entry(lang.clone()) {
+			Entry::Occupied(entry) => entry.into_mut(),
+			Entry::Vacant(entry) => entry.insert(Self::create_lang_tool(lang, &mut guard)?),
+		};
 		guard.call_method(
-			&self.lang_tool,
+			lang_tool,
 			"disableRules",
 			"(Ljava/util/List;)V",
 			&[JValue::Object(args.as_ref())],
