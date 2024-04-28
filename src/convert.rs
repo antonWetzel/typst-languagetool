@@ -92,9 +92,6 @@ pub fn document(doc: &Document, chunk_size: usize, file_id: FileId) -> Vec<(Stri
 			res.push((converter.text, converter.mapping));
 		}
 	}
-	for (text, mapping) in &res {
-		eprintln!("{} {}", mapping.language.as_str(), text);
-	}
 	res
 }
 
