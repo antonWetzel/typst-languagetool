@@ -106,7 +106,7 @@ impl InitOptions {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-	eprintln!("starting LSP server");
+	eprintln!("Starting LSP server");
 
 	let (connection, io_threads) = Connection::stdio();
 
@@ -140,7 +140,7 @@ async fn main() -> anyhow::Result<()> {
 	state.main_loop().await?;
 	io_threads.join()?;
 
-	eprintln!("shutting down server");
+	eprintln!("Shutting down server");
 	Ok(())
 }
 
@@ -176,13 +176,13 @@ impl State {
 		let options = params.initialization_options.context("No init options")?;
 
 		let mut options = serde_ignored::deserialize::<_, _, InitOptions>(options, |path| {
-			eprintln!("unknown option: {}", path);
+			eprintln!("Unknown option: {}", path);
 		})?;
 
 		let cache = Cache::new();
 
 		options.make_absolute();
-		eprintln!("options: {:#?}", options);
+		eprintln!("Options: {:#?}", options);
 		let lt = options.create_lt().await?;
 		let Some(main) = &options.main else {
 			return Err(anyhow::anyhow!("main file is required")).unwrap();
@@ -190,10 +190,16 @@ impl State {
 
 		let world = lt_world::LtWorld::new(main.clone(), options.root);
 
-		eprintln!("compiling document");
-		if world.compile().is_none() {
-			eprintln!("failed to compile document");
-		};
+		eprintln!("Compiling document");
+		match world.compile() {
+			Ok(_) => {},
+			Err(err) => {
+				eprintln!("Failed to compile document");
+				for dia in err {
+					eprintln!("\t{:?}", dia);
+				}
+			},
+		}
 
 		Ok(Self {
 			world,
@@ -211,7 +217,7 @@ impl State {
 	}
 
 	pub async fn main_loop(mut self) -> anyhow::Result<()> {
-		eprintln!("waiting for events");
+		eprintln!("Waiting for events");
 		loop {
 			match self.next_action()? {
 				Action::Message(msg) => self.message(msg).await?,
@@ -246,7 +252,7 @@ impl State {
 				self.request(req).await
 			},
 			Message::Response(resp) => {
-				eprintln!("unknown response: {:?}", resp);
+				eprintln!("Unknown response: {:?}", resp);
 				Ok(())
 			},
 			Message::Notification(not) => self.notification(not).await,
@@ -263,7 +269,7 @@ impl State {
 			Err(err @ ExtractError::JsonError { .. }) => return Err(err.into()),
 			Err(ExtractError::MethodMismatch(req)) => req,
 		};
-		eprintln!("unknown request: {:?}", req);
+		eprintln!("Unknown request: {:?}", req);
 		Ok(())
 	}
 
@@ -351,7 +357,7 @@ impl State {
 			Err(err @ ExtractError::JsonError { .. }) => return Err(err.into()),
 			Err(ExtractError::MethodMismatch(not)) => not,
 		};
-		eprintln!("unknown notification: {:?}", not);
+		eprintln!("Unknown notification: {:?}", not);
 		Ok(())
 	}
 
@@ -425,16 +431,17 @@ impl State {
 				return Ok(());
 			},
 		};
-
+		let l = diagnostics.len();
 		let params = PublishDiagnosticsParams { uri: url, version: None, diagnostics };
 		send_notification::<PublishDiagnostics>(&self.connection, params)?;
+		eprintln!("{} Diagnostics send", l);
 		Ok(())
 	}
 
 	async fn config_change(&mut self, params: DidChangeConfigurationParams) -> anyhow::Result<()> {
 		let mut options =
 			match serde_ignored::deserialize::<_, _, InitOptions>(params.settings, |path| {
-				eprintln!("unknown option {}", path);
+				eprintln!("Unknown option {}", path);
 			}) {
 				Ok(o) => o,
 				Err(err) => {
@@ -444,7 +451,7 @@ impl State {
 			};
 
 		options.make_absolute();
-		eprintln!("options: {:#?}", options);
+		eprintln!("Options: {:#?}", options);
 
 		self.lt = match options.create_lt().await {
 			Ok(lt) => lt,
@@ -468,9 +475,15 @@ impl State {
 	}
 
 	async fn get_diagnostics(&mut self, path: &Path) -> anyhow::Result<Vec<Diagnostic>> {
-		let Some(doc) = self.world.compile() else {
-			eprintln!("TODO: Warning could not compile");
-			return Ok(Vec::new());
+		let doc = match self.world.compile() {
+			Ok(doc) => doc,
+			Err(err) => {
+				eprintln!("Failed to compile document");
+				for dia in err {
+					eprintln!("\t{:?}", dia);
+				}
+				return Ok(Vec::new());
+			},
 		};
 
 		let file_id = self.world.file_id(path);
@@ -479,6 +492,7 @@ impl State {
 		let mut collector = typst_languagetool::FileCollector::new(file_id, &self.world);
 		let mut next_cache = Cache::new();
 		let l = paragraphs.len();
+		eprintln!("Checking {} paragraphs", l);
 		for (idx, (text, mapping)) in paragraphs.into_iter().enumerate() {
 			let lang = self
 				.options

@@ -10,7 +10,7 @@ use chrono::{DateTime, Datelike, FixedOffset, Local, Utc};
 use comemo::Prehashed;
 use fonts::FontManager;
 use typst::{
-	diag::{FileError, FileResult},
+	diag::{FileError, FileResult, SourceResult},
 	eval::Tracer,
 	foundations::{Dict, Value},
 	model::Document,
@@ -87,9 +87,9 @@ impl LtWorld {
 		self.shadow_files.remove(&file_id);
 	}
 
-	pub fn compile(&self) -> Option<Document> {
+	pub fn compile(&self) -> SourceResult<Document> {
 		let mut tracer = Tracer::new();
-		typst::compile(self, &mut tracer).ok()
+		typst::compile(self, &mut tracer)
 	}
 }
 

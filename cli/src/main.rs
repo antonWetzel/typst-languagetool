@@ -152,13 +152,19 @@ async fn handle_file(
 	chunk_size: usize,
 	cache: &mut Cache,
 ) -> anyhow::Result<()> {
-	let Some(doc) = world.compile() else {
-		if args.plain {
-			println!("Failed to compile document!");
-		} else {
-			println!("{}", "Failed to compile document!\n".red().bold());
-		}
-		return Ok(());
+	let doc = match world.compile() {
+		Ok(doc) => doc,
+		Err(err) => {
+			if args.plain {
+				println!("Failed to compile document!");
+			} else {
+				println!("{}", "Failed to compile document!\n".red().bold());
+			}
+			for dia in err {
+				println!("\t{:?}", dia);
+			}
+			return Ok(());
+		},
 	};
 
 	let file_id = world.file_id(path);

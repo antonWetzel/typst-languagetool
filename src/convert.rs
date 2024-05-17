@@ -44,7 +44,6 @@ impl Mapping {
 				}
 			}
 		}
-
 		locations
 	}
 
@@ -200,20 +199,25 @@ impl Converter {
 				self.y = pos.y;
 				self.text += t.text.as_str();
 
-				let mut iter = t.glyphs.iter();
-				for _ in t.text.encode_utf16() {
-					let g = iter.next();
-					let m = g
-						.map(|g| (g.span.0, g.span.1..(g.span.1 + g.range.len() as u16)))
-						.unwrap_or((Span::detached(), 0..0));
-					if let Some(id) = m.0.id() {
-						self.span = (m.0, m.1.end);
-						if id == file_id {
-							self.contains_file = true;
+				let mut iter = t.text.chars();
+				for g in t.glyphs.iter().cloned() {
+					let Some(text) = t.text.get(g.range()) else {
+						continue;
+					};
+					for t in text.chars() {
+						assert_eq!(t, iter.next().unwrap());
+
+						let m = (g.span.0, g.span.1..(g.span.1 + g.range.len() as u16));
+						if let Some(id) = m.0.id() {
+							self.span = (m.0, m.1.end);
+							if id == file_id {
+								self.contains_file = true;
+							}
 						}
+						self.mapping.chars.push(m);
 					}
-					self.mapping.chars.push(m);
 				}
+				assert_eq!(None, iter.next());
 			},
 			I::Meta(M::Link(..) | M::Elem(..) | M::Hide, _) | I::Shape(..) | I::Image(..) => {},
 		}
