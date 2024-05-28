@@ -68,7 +68,7 @@ Spellcheck typst files with LanguageTool.
 
 - terminal
 	- install command line interface (CLI)
-		- `cargo install --git=https://github.com/antonWetzel/typst-languagetool cli features=...`
+		- `cargo install --git=https://github.com/antonWetzel/typst-languagetool cli --features=...`
 	- Check on time or watch for changes
 		- `typst-languagetool check ...`
 		- `typst-languagetool watch ...`
@@ -83,7 +83,7 @@ Spellcheck typst files with LanguageTool.
 		- `--root=<path>`
 - vs-codium/vs-code
 	- install language server protocal (LSP)
-		- `cargo install --git=https://github.com/antonWetzel/typst-languagetool lsp features=...`
+		- `cargo install --git=https://github.com/antonWetzel/typst-languagetool lsp --features=...`
 	- install generic lsp (`editors/vscodium/generic-lsp/generic-lsp-0.0.1.vsix`)
 	- configure options (see below)
 	- hints should appear
