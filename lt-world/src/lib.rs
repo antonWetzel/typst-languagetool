@@ -56,9 +56,10 @@ impl LtWorld {
 		&self.root
 	}
 
-	pub fn file_id(&self, path: &Path) -> FileId {
-		let path = path.strip_prefix(&self.root).unwrap();
-		FileId::new(None, VirtualPath::new(path))
+	pub fn file_id(&self, path: &Path) -> Option<FileId> {
+		let path = path.strip_prefix(&self.root).ok()?;
+		let id = FileId::new(None, VirtualPath::new(path));
+		Some(id)
 	}
 
 	pub fn path(&self, file_id: FileId) -> typst::diag::FileResult<PathBuf> {
@@ -72,18 +73,22 @@ impl LtWorld {
 	}
 
 	pub fn use_shadow_file(&mut self, path: &Path, text: String) {
-		let file_id = self.file_id(path);
+		let Some(file_id) = self.file_id(path) else {
+			return;
+		};
 		self.shadow_files
 			.insert(file_id, Source::new(file_id, text));
 	}
 
 	pub fn shadow_file(&mut self, path: &Path) -> Option<&mut Source> {
-		let file_id = self.file_id(path);
+		let file_id = self.file_id(path)?;
 		self.shadow_files.get_mut(&file_id)
 	}
 
 	pub fn use_original_file(&mut self, path: &Path) {
-		let file_id = self.file_id(path);
+		let Some(file_id) = self.file_id(path) else {
+			return;
+		};
 		self.shadow_files.remove(&file_id);
 	}
 

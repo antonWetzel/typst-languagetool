@@ -486,7 +486,9 @@ impl State {
 			},
 		};
 
-		let file_id = self.world.file_id(path);
+		let Some(file_id) = self.world.file_id(path) else {
+			return Ok(Vec::new());
+		};
 		let paragraphs =
 			typst_languagetool::convert::document(&doc, self.options.chunk_size, file_id);
 		let mut collector = typst_languagetool::FileCollector::new(file_id, &self.world);

@@ -167,7 +167,7 @@ async fn handle_file(
 		},
 	};
 
-	let file_id = world.file_id(path);
+	let file_id = world.file_id(path).unwrap();
 	let paragraphs = typst_languagetool::convert::document(&doc, chunk_size, file_id);
 	let mut collector = typst_languagetool::FileCollector::new(file_id, world);
 	let mut next_cache = Cache::new();
