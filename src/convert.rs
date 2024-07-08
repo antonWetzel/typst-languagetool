@@ -199,12 +199,12 @@ impl Converter {
 				self.y = pos.y;
 				self.text += t.text.as_str();
 
-				let mut iter = t.text.chars();
+				let mut iter = t.text.encode_utf16();
 				for g in t.glyphs.iter().cloned() {
 					let Some(text) = t.text.get(g.range()) else {
 						continue;
 					};
-					for t in text.chars() {
+					for t in text.encode_utf16() {
 						assert_eq!(t, iter.next().unwrap());
 
 						let m = (g.span.0, g.span.1..(g.span.1 + g.range.len() as u16));

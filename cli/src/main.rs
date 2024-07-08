@@ -104,7 +104,9 @@ async fn main() -> anyhow::Result<()> {
 
 async fn check(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::Result<()> {
 	handle_file(
-		args.path.as_ref().unwrap(),
+		args.path
+			.as_ref()
+			.unwrap_or_else(|| args.main.as_ref().unwrap()),
 		&mut lt,
 		&args,
 		&mut world,
