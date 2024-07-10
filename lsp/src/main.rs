@@ -148,6 +148,7 @@ struct Options {
 	chunk_size: usize,
 	on_change: Option<std::time::Duration>,
 	language_codes: HashMap<String, String>,
+	main: Option<PathBuf>,
 }
 
 struct State {
@@ -184,22 +185,10 @@ impl State {
 		options.make_absolute();
 		eprintln!("Options: {:#?}", options);
 		let lt = options.create_lt().await?;
-		let Some(main) = &options.main else {
-			return Err(anyhow::anyhow!("main file is required")).unwrap();
-		};
 
-		let world = lt_world::LtWorld::new(main.clone(), options.root);
+		let world = lt_world::LtWorld::new(options.root.clone().unwrap_or_else(|| ".".into()));
 
 		eprintln!("Compiling document");
-		match world.compile() {
-			Ok(_) => {},
-			Err(err) => {
-				eprintln!("Failed to compile document");
-				for dia in err {
-					eprintln!("\t{:?}", dia);
-				}
-			},
-		}
 
 		Ok(Self {
 			world,
@@ -212,6 +201,7 @@ impl State {
 				on_change: options.on_change,
 				chunk_size: options.chunk_size,
 				language_codes: create_language_map(options.languages),
+				main: options.main,
 			},
 		})
 	}
@@ -461,21 +451,26 @@ impl State {
 			},
 		};
 
-		if let Some(main) = options.main {
-			self.world.update(main, options.root);
+		if let Some(root) = options.root {
+			self.world = LtWorld::new(root);
 		}
 
 		self.options = Options {
 			on_change: options.on_change,
 			chunk_size: options.chunk_size,
 			language_codes: create_language_map(options.languages),
+			main: options.main,
 		};
 
 		Ok(())
 	}
 
 	async fn get_diagnostics(&mut self, path: &Path) -> anyhow::Result<Vec<Diagnostic>> {
-		let doc = match self.world.compile() {
+		let world = self
+			.world
+			.with_main(self.options.main.clone().unwrap_or_else(|| path.to_owned()));
+		eprintln!("Compiling");
+		let doc = match world.compile() {
 			Ok(doc) => doc,
 			Err(err) => {
 				eprintln!("Failed to compile document");
@@ -489,9 +484,10 @@ impl State {
 		let Some(file_id) = self.world.file_id(path) else {
 			return Ok(Vec::new());
 		};
+		eprintln!("Converting");
 		let paragraphs =
 			typst_languagetool::convert::document(&doc, self.options.chunk_size, file_id);
-		let mut collector = typst_languagetool::FileCollector::new(file_id, &self.world);
+		let mut collector = typst_languagetool::FileCollector::new(file_id, &world);
 		let mut next_cache = Cache::new();
 		let l = paragraphs.len();
 		eprintln!("Checking {} paragraphs", l);

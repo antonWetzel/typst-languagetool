@@ -3,6 +3,7 @@ mod package;
 
 use std::{
 	collections::HashMap,
+	ops::Deref,
 	path::{Path, PathBuf},
 };
 
@@ -23,33 +24,30 @@ use typst::{
 pub struct LtWorld {
 	library: Prehashed<Library>,
 	now: DateTime<Utc>,
-	main: FileId,
-	root: PathBuf,
+
 	font_manager: FontManager,
 	shadow_files: HashMap<FileId, Source>,
+	root: PathBuf,
+}
+
+pub struct LtWorldRunning<'a> {
+	world: &'a LtWorld,
+	main: FileId,
 }
 
 impl LtWorld {
-	pub fn new(main: PathBuf, root: Option<PathBuf>) -> Self {
-		let root = root.unwrap_or_else(|| main.parent().unwrap().to_path_buf());
-		let main = VirtualPath::new(main.strip_prefix(&root).unwrap());
+	pub fn new(root: PathBuf) -> Self {
 		let mut inputs = Dict::new();
 		inputs.insert("spellcheck".into(), Value::Bool(true));
+		let root = root.canonicalize().unwrap();
 
 		Self {
 			library: Prehashed::new(Library::builder().with_inputs(inputs).build()),
 			now: chrono::Utc::now(),
 			font_manager: FontManager::new(),
-			main: FileId::new(None, main),
 			root,
 			shadow_files: HashMap::new(),
 		}
-	}
-
-	pub fn update(&mut self, main: PathBuf, root: Option<PathBuf>) {
-		self.root = root.unwrap_or_else(|| main.parent().unwrap().to_path_buf());
-		let main = VirtualPath::new(main.strip_prefix(&self.root).unwrap());
-		self.main = FileId::new(None, main);
 	}
 
 	pub fn root(&self) -> &Path {
@@ -57,19 +55,10 @@ impl LtWorld {
 	}
 
 	pub fn file_id(&self, path: &Path) -> Option<FileId> {
+		let path = path.canonicalize().unwrap();
 		let path = path.strip_prefix(&self.root).ok()?;
 		let id = FileId::new(None, VirtualPath::new(path));
 		Some(id)
-	}
-
-	pub fn path(&self, file_id: FileId) -> typst::diag::FileResult<PathBuf> {
-		let path = if let Some(spec) = file_id.package() {
-			crate::package::prepare_package(spec)?.join(file_id.vpath().as_rootless_path())
-		} else {
-			self.root.join(file_id.vpath().as_rootless_path())
-		};
-
-		Ok(path)
 	}
 
 	pub fn use_shadow_file(&mut self, path: &Path, text: String) {
@@ -92,13 +81,46 @@ impl LtWorld {
 		self.shadow_files.remove(&file_id);
 	}
 
+	pub fn path(&self, file_id: FileId) -> typst::diag::FileResult<PathBuf> {
+		let path = if let Some(spec) = file_id.package() {
+			crate::package::prepare_package(spec)?.join(file_id.vpath().as_rootless_path())
+		} else {
+			self.root.join(file_id.vpath().as_rootless_path())
+		};
+
+		Ok(path)
+	}
+
+	pub fn with_main(&self, main: PathBuf) -> LtWorldRunning {
+		let main = VirtualPath::new(
+			main.canonicalize()
+				.unwrap()
+				.strip_prefix(&self.root)
+				.unwrap(),
+		);
+		LtWorldRunning {
+			world: &self,
+			main: FileId::new(None, main),
+		}
+	}
+}
+
+impl Deref for LtWorldRunning<'_> {
+	type Target = LtWorld;
+
+	fn deref(&self) -> &Self::Target {
+		self.world
+	}
+}
+
+impl LtWorldRunning<'_> {
 	pub fn compile(&self) -> SourceResult<Document> {
 		let mut tracer = Tracer::new();
 		typst::compile(self, &mut tracer)
 	}
 }
 
-impl World for LtWorld {
+impl World for LtWorldRunning<'_> {
 	fn library(&self) -> &Prehashed<Library> {
 		&self.library
 	}

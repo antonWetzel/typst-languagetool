@@ -92,12 +92,13 @@ Spellcheck typst files with LanguageTool.
 ## LSP Options
 
 ```rust
-/// Language Code like "en-US"
-language: String,
-/// Additional allowed words
-dictionary: Vec<String>,
-/// Languagetool rules to ignore (WHITESPACE_RULE, ...)
-disabled_checks: Vec<String>,
+/// Additional allowed words for language codes
+dictionary: HashMap<String, Vec<String>>,
+/// Languagetool rules to ignore (WHITESPACE_RULE, ...) for language codes
+disabled_checks: HashMap<String, Vec<String>>,
+
+/// preferred language codes
+languages: Vec<String>,
 
 /// use bundled languagetool
 bundled: bool,
@@ -117,5 +118,5 @@ on_change: Option<std::time::Duration>,
 /// Project Root
 root: Option<PathBuf>,
 /// Project Main File
-main: PathBuf,
+main: Option<PathBuf>,
 ```

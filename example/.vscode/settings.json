@@ -12,8 +12,8 @@
                 "bundled": true,
                 // "host": "http://127.0.0.1",
                 // "port": "8081",
-                "main": "./main.typ",
-                "root": ".",
+                // "main": "./main.typ",
+                // "root": ".",
                 "on_change": "1000ms",
                 "dictionary": {
                     "de-DE": [
@@ -23,7 +23,7 @@
                 "disabled_checks": {},
                 "languages": [
                     "en-US",
-                ]
+                ],
             }
         }
     ]

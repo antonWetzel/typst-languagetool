@@ -1,5 +1,6 @@
 mod output;
 
+use anyhow::Context;
 use clap::{Parser, ValueEnum};
 
 use colored::Colorize;
@@ -77,22 +78,7 @@ async fn main() -> anyhow::Result<()> {
 		args.port.as_ref(),
 	)?;
 
-	let world = match (args.path.clone(), args.main.clone()) {
-		(_, Some(main)) => lt_world::LtWorld::new(main, args.root.clone()),
-		(Some(main), None) => lt_world::LtWorld::new(main, args.root.clone()),
-
-		_ => return Err(anyhow::anyhow!("Invalid typst settings.")),
-	};
-
-	// if let Some(path) = &args.dictionary {
-	// 	let content = std::fs::read_to_string(path)?;
-	// 	let words = content
-	// 		.lines()
-	// 		.map(|line| String::from(line))
-	// 		.collect::<Vec<_>>();
-	// 	lt.allow_words(&words).await?;
-	// }
-	// lt.disable_checks(&args.disabled_checks).await?;
+	let world = lt_world::LtWorld::new(args.root.clone().unwrap_or(".".into()));
 
 	match args.task {
 		Task::Check => check(args, lt, world).await?,
@@ -106,7 +92,8 @@ async fn check(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::
 	handle_file(
 		args.path
 			.as_ref()
-			.unwrap_or_else(|| args.main.as_ref().unwrap()),
+			.or_else(|| args.main.as_ref())
+			.context("No path or main specified")?,
 		&mut lt,
 		&args,
 		&mut world,
@@ -154,6 +141,7 @@ async fn handle_file(
 	chunk_size: usize,
 	cache: &mut Cache,
 ) -> anyhow::Result<()> {
+	let world = world.with_main(args.main.clone().unwrap_or(path.to_owned()));
 	let doc = match world.compile() {
 		Ok(doc) => doc,
 		Err(err) => {
@@ -171,7 +159,7 @@ async fn handle_file(
 
 	let file_id = world.file_id(path).unwrap();
 	let paragraphs = typst_languagetool::convert::document(&doc, chunk_size, file_id);
-	let mut collector = typst_languagetool::FileCollector::new(file_id, world);
+	let mut collector = typst_languagetool::FileCollector::new(file_id, &world);
 	let mut next_cache = Cache::new();
 	for (text, mapping) in paragraphs {
 		let lang = mapping.long_language();
