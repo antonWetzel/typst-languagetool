@@ -43,6 +43,18 @@ Spellcheck typst files with LanguageTool.
 }
 ```
 
+## Language Selection
+
+The compiled document contains the text language, but not the region.
+```typst
+#set text(
+    lang: "de", // included
+    region: "DE", // lost
+)
+```
+The text language is used to determine the region code ("de-DE", ...).
+If another region is desired, it can be specified in the language parameter.
+
 ## LanguageTool Backend
 
 - different LanguageTool backends can be used to check the text
