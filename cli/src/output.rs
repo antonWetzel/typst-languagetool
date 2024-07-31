@@ -9,8 +9,8 @@ const MAX_SUGGESTIONS: usize = 20;
 pub fn plain(file: &Path, source: &Source, diagnostic: Diagnostic) {
 	let mut out = stdout().lock();
 
-	let (start_line, start_column) = byte_to_position(source, diagnostic.locations[0].start);
-	let (end_line, end_column) = byte_to_position(source, diagnostic.locations[0].end);
+	let (start_line, start_column) = byte_to_position(source, diagnostic.locations[0].1.start);
+	let (end_line, end_column) = byte_to_position(source, diagnostic.locations[0].1.end);
 	write!(
 		out,
 		"{} {}:{}-{}:{} info {}",
@@ -42,8 +42,8 @@ pub fn plain(file: &Path, source: &Source, diagnostic: Diagnostic) {
 pub fn pretty(file: &Path, source: &Source, diagnostic: Diagnostic) {
 	let file_name = format!("{}", file.display());
 
-	let (start_line, _) = byte_to_position(source, diagnostic.locations[0].start);
-	let (end_line, _) = byte_to_position(source, diagnostic.locations[0].end);
+	let (start_line, _) = byte_to_position(source, diagnostic.locations[0].1.start);
+	let (end_line, _) = byte_to_position(source, diagnostic.locations[0].1.end);
 	let text = source.text();
 	let context = if start_line == end_line {
 		source.line_to_range(start_line).unwrap()
@@ -58,8 +58,8 @@ pub fn pretty(file: &Path, source: &Source, diagnostic: Diagnostic) {
 		.origin(&file_name)
 		.fold(true);
 
-	let start = diagnostic.locations[0].start - context.start;
-	let end = diagnostic.locations[0].end - context.start;
+	let start = diagnostic.locations[0].1.start - context.start;
+	let end = diagnostic.locations[0].1.end - context.start;
 
 	snippet = snippet.annotation(Level::Info.span(start..end).label(&diagnostic.message));
 

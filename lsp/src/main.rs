@@ -10,6 +10,7 @@ use lsp_types::*;
 use lt_world::LtWorld;
 use serde_json::Value;
 use typst::syntax::Source;
+use typst::World;
 use typst_languagetool::{LanguageTool, LanguageToolBackend, Suggestion};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
@@ -486,8 +487,8 @@ impl State {
 		};
 		eprintln!("Converting");
 		let paragraphs =
-			typst_languagetool::convert::document(&doc, self.options.chunk_size, file_id);
-		let mut collector = typst_languagetool::FileCollector::new(file_id, &world);
+			typst_languagetool::convert::document(&doc, self.options.chunk_size, Some(file_id));
+		let mut collector = typst_languagetool::FileCollector::new(Some(file_id), &world);
 		let mut next_cache = Cache::new();
 		let l = paragraphs.len();
 		eprintln!("Checking {} paragraphs", l);
@@ -504,20 +505,22 @@ impl State {
 				eprintln!("Checking {}/{}", idx + 1, l);
 				self.lt.check_text(lang, &text).await?
 			};
-			collector.add(&suggestions, mapping);
+			collector.add(&world, &suggestions, &mapping);
 			next_cache.insert(text, suggestions);
 		}
 		self.cache = next_cache;
 		eprintln!("Generating diagnostics");
 
-		let (source, diagnostics) = collector.finish();
+		let diagnostics = collector.finish();
+		let source = world.source(file_id).unwrap();
 
 		let diagnostics = diagnostics
 			.into_iter()
 			.map(|diagnostic| {
 				let (start_line, start_column) =
-					byte_to_position(&source, diagnostic.locations[0].start);
-				let (end_line, end_column) = byte_to_position(&source, diagnostic.locations[0].end);
+					byte_to_position(&source, diagnostic.locations[0].1.start);
+				let (end_line, end_column) =
+					byte_to_position(&source, diagnostic.locations[0].1.end);
 
 				Diagnostic {
 					range: Range {

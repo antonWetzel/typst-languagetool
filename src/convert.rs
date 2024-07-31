@@ -5,6 +5,7 @@ use typst::{
 	model::Document,
 	syntax::{FileId, Source, Span, SyntaxKind},
 	text::{Lang, TextItem},
+	World,
 };
 
 use crate::Suggestion;
@@ -16,16 +17,30 @@ pub struct Mapping {
 }
 
 impl Mapping {
-	pub fn location(&self, suggestion: &Suggestion, source: &Source) -> Vec<Range<usize>> {
+	pub fn location(
+		&self,
+		suggestion: &Suggestion,
+		world: &impl World,
+		source: Option<&Source>,
+	) -> Vec<(FileId, Range<usize>)> {
 		let chars = &self.chars[suggestion.start..suggestion.end];
-		let mut locations = Vec::<Range<usize>>::new();
+		let mut locations = Vec::<(FileId, Range<usize>)>::new();
 		for (span, range) in chars.iter().cloned() {
 			let Some(id) = span.id() else {
 				continue;
 			};
-			if id != source.id() {
-				continue;
-			}
+			let source = if let Some(source) = source {
+				if source.id() != id {
+					continue;
+				}
+				source.clone()
+			} else {
+				let Ok(source) = world.source(id) else {
+					continue;
+				};
+				source
+			};
+
 			let Some(node) = source.find(span) else {
 				continue;
 			};
@@ -33,14 +48,18 @@ impl Mapping {
 				let start = node.range().start;
 				let range = (start + range.start as usize)..(start + range.end as usize);
 				match locations.last_mut() {
-					Some(last_range) if last_range.end == range.start => last_range.end = range.end,
-					_ => locations.push(range),
+					Some((last_id, last_range))
+						if *last_id == id && last_range.end == range.start =>
+					{
+						last_range.end = range.end
+					},
+					_ => locations.push((id, range)),
 				}
 			} else {
 				let range = node.range();
 				match locations.last_mut() {
-					Some(last_range) if *last_range == range => {},
-					_ => locations.push(range),
+					Some((last_id, last_range)) if *last_id == id && *last_range == range => {},
+					_ => locations.push((id, range)),
 				}
 			}
 		}
@@ -74,14 +93,18 @@ impl Mapping {
 			Lang::PORTUGUESE => "pt-PT".into(),
 			Lang::ENGLISH => "en-GB".into(),
 			Lang::GERMAN => "de-DE".into(),
-			lang @ _ => lang.as_str().into(),
+			lang => lang.as_str().into(),
 		}
 	}
 }
 
 const LINE_SPACING: Em = Em::new(0.65);
 
-pub fn document(doc: &Document, chunk_size: usize, file_id: FileId) -> Vec<(String, Mapping)> {
+pub fn document(
+	doc: &Document,
+	chunk_size: usize,
+	file_id: Option<FileId>,
+) -> Vec<(String, Mapping)> {
 	let mut res = Vec::new();
 
 	for page in &doc.pages {
@@ -170,7 +193,7 @@ impl Converter {
 		frame: &typst::layout::Frame,
 		pos: Point,
 		res: &mut Vec<(String, Mapping)>,
-		file_id: FileId,
+		file_id: Option<FileId>,
 	) {
 		for &(p, ref item) in frame.items() {
 			self.item(p + pos, item, res, file_id);
@@ -182,7 +205,7 @@ impl Converter {
 		pos: Point,
 		item: &typst::layout::FrameItem,
 		res: &mut Vec<(String, Mapping)>,
-		file_id: FileId,
+		file_id: Option<FileId>,
 	) {
 		use typst::introspection::Meta as M;
 		use typst::layout::FrameItem as I;
@@ -210,9 +233,8 @@ impl Converter {
 						let m = (g.span.0, g.span.1..(g.span.1 + g.range.len() as u16));
 						if let Some(id) = m.0.id() {
 							self.span = (m.0, m.1.end);
-							if id == file_id {
-								self.contains_file = true;
-							}
+							self.contains_file |=
+								file_id.map(|file_id| file_id == id).unwrap_or(true);
 						}
 						self.mapping.chars.push(m);
 					}

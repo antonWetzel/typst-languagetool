@@ -7,10 +7,12 @@ use colored::Colorize;
 use lt_world::LtWorld;
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
+use typst::World;
 use typst_languagetool::{LanguageTool, LanguageToolBackend, Suggestion};
 
 use std::{
 	collections::HashMap,
+	ops::Not,
 	path::{Path, PathBuf},
 	time::Duration,
 };
@@ -99,6 +101,7 @@ async fn check(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::
 		&mut world,
 		args.chunk_size,
 		&mut Cache::new(),
+		args.path.is_none(),
 	)
 	.await?;
 	Ok(())
@@ -126,6 +129,7 @@ async fn watch(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::
 				&mut world,
 				args.chunk_size,
 				&mut cache,
+				false,
 			)
 			.await?;
 		}
@@ -140,6 +144,7 @@ async fn handle_file(
 	world: &LtWorld,
 	chunk_size: usize,
 	cache: &mut Cache,
+	include_all: bool,
 ) -> anyhow::Result<()> {
 	let world = world.with_main(args.main.clone().unwrap_or(path.to_owned()));
 	let doc = match world.compile() {
@@ -158,8 +163,10 @@ async fn handle_file(
 	};
 
 	let file_id = world.file_id(path).unwrap();
-	let paragraphs = typst_languagetool::convert::document(&doc, chunk_size, file_id);
-	let mut collector = typst_languagetool::FileCollector::new(file_id, &world);
+	let file_id_opt = include_all.not().then_some(file_id);
+
+	let paragraphs = typst_languagetool::convert::document(&doc, chunk_size, file_id_opt);
+	let mut collector = typst_languagetool::FileCollector::new(file_id_opt, &world);
 	let mut next_cache = Cache::new();
 	for (text, mapping) in paragraphs {
 		let lang = mapping.long_language();
@@ -169,27 +176,61 @@ async fn handle_file(
 			lt.check_text(lang, &text).await?
 		};
 
-		collector.add(&suggestions, mapping);
+		collector.add(&world, &suggestions, &mapping);
 		next_cache.insert(text, suggestions);
 	}
 	*cache = next_cache;
 
-	let (source, diagnostics) = collector.finish();
+	let diagnostics = collector.finish();
 
-	if args.plain {
-		println!("START");
-		for diagnostic in diagnostics {
-			output::plain(&path, &source, diagnostic);
+	if include_all {
+		if args.plain {
+			plain_start();
+			for diagnostic in diagnostics {
+				let id = diagnostic.locations[0].0;
+				let source = world.source(id).unwrap();
+				let path = id.vpath().as_rootless_path();
+				output::plain(&path, &source, diagnostic);
+			}
+			plain_end();
+		} else {
+			pretty_start();
+			for diagnostic in diagnostics {
+				let id = diagnostic.locations[0].0;
+				let source = world.source(id).unwrap();
+				let path = id.vpath().as_rootless_path();
+				output::pretty(&path, &source, diagnostic);
+			}
 		}
-		println!("END");
 	} else {
-		println!("{}", "\n\nChecking Document\n".green().bold());
-		for diagnostic in diagnostics {
-			output::pretty(&path, &source, diagnostic);
+		let source = world.source(file_id).unwrap();
+		if args.plain {
+			plain_start();
+			for diagnostic in diagnostics {
+				output::plain(&path, &source, diagnostic);
+			}
+			plain_end();
+		} else {
+			pretty_start();
+			println!("{}", "\n\nChecking Document\n".green().bold());
+			for diagnostic in diagnostics {
+				output::pretty(&path, &source, diagnostic);
+			}
 		}
 	}
-
 	Ok(())
+}
+
+fn plain_start() {
+	println!("START");
+}
+
+fn plain_end() {
+	println!("END");
+}
+
+fn pretty_start() {
+	println!("{}", "\n\nChecking Document\n".green().bold());
 }
 
 #[derive(Debug)]

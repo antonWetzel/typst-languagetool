@@ -1,7 +1,7 @@
 mod backends;
 pub mod convert;
 
-use std::ops::{Not, Range};
+use std::ops::Range;
 
 pub use backends::*;
 use convert::Mapping;
@@ -89,41 +89,42 @@ impl LanguageToolBackend for LanguageTool {
 }
 
 pub struct FileCollector {
-	source: Source,
+	source: Option<Source>,
 	diagnostics: Vec<Diagnostic>,
 }
 
 impl FileCollector {
-	pub fn new(file_id: FileId, world: &impl World) -> Self {
-		let source = world.source(file_id).unwrap();
+	pub fn new(file_id: Option<FileId>, world: &impl World) -> Self {
+		let source = file_id.map(|id| world.source(id).unwrap());
 		Self { source, diagnostics: Vec::new() }
 	}
 
-	pub fn add(&mut self, suggestions: &[Suggestion], mapping: Mapping) {
-		let diagnostics = suggestions
-			.iter()
-			.map(|suggestion| {
-				let locations = mapping.location(suggestion, &self.source);
-				Diagnostic {
-					locations,
-					message: suggestion.message.clone(),
-					replacements: suggestion.replacements.clone(),
-					rule_description: suggestion.rule_description.clone(),
-					rule_id: suggestion.rule_id.clone(),
-				}
-			})
-			.filter(|diagnostic| diagnostic.locations.is_empty().not());
+	pub fn add(&mut self, world: &impl World, suggestions: &[Suggestion], mapping: &Mapping) {
+		let diagnostics = suggestions.iter().filter_map(|suggestion| {
+			let locations = mapping.location(suggestion, world, self.source.as_ref());
+			if locations.is_empty() {
+				return None;
+			}
+			let dia = Diagnostic {
+				locations,
+				message: suggestion.message.clone(),
+				replacements: suggestion.replacements.clone(),
+				rule_description: suggestion.rule_description.clone(),
+				rule_id: suggestion.rule_id.clone(),
+			};
+			Some(dia)
+		});
 		self.diagnostics.extend(diagnostics)
 	}
 
-	pub fn finish(self) -> (Source, Vec<Diagnostic>) {
-		(self.source, self.diagnostics)
+	pub fn finish(self) -> Vec<Diagnostic> {
+		self.diagnostics
 	}
 }
 
 #[derive(Debug, Clone)]
 pub struct Diagnostic {
-	pub locations: Vec<Range<usize>>,
+	pub locations: Vec<(FileId, Range<usize>)>,
 	pub message: String,
 	pub replacements: Vec<String>,
 	pub rule_description: String,

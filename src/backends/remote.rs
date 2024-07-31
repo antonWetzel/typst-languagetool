@@ -25,13 +25,12 @@ impl LanguageToolRemote {
 impl LanguageToolBackend for LanguageToolRemote {
 	async fn allow_words(&mut self, lang: String, words: &[String]) -> anyhow::Result<()> {
 		self.allowed_words
-			.insert(lang, words.iter().map(|x| x.clone()).collect());
+			.insert(lang, words.iter().cloned().collect());
 		Ok(())
 	}
 
 	async fn disable_checks(&mut self, lang: String, checks: &[String]) -> anyhow::Result<()> {
-		self.disabled_categories
-			.insert(lang, checks.iter().map(|x| x.clone()).collect());
+		self.disabled_categories.insert(lang, checks.to_vec());
 		Ok(())
 	}
 
@@ -40,7 +39,7 @@ impl LanguageToolBackend for LanguageToolRemote {
 		lang: String,
 		text: &str,
 	) -> anyhow::Result<Vec<crate::Suggestion>> {
-		let disabled_rules = self.disabled_categories.get(&lang).map(|x| x.clone());
+		let disabled_rules = self.disabled_categories.get(&lang).cloned();
 		let allowed = self.allowed_words.get(&lang);
 
 		let mut req = CheckRequest::default()
