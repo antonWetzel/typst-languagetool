@@ -100,6 +100,15 @@ If another region is desired, it can be specified in the language parameter.
 	- configure options (see below)
 	- hints should appear
 		- first check takes longer
+- neovim
+	- install language server protocal (LSP)
+		- `cargo install --git=https://github.com/antonWetzel/typst-languagetool lsp --features=...`
+    - copy the `editors/nvim/typst.lua` file in the `ftplugin/` folder (should be in the nvim config path)
+	- configure options in `init_option` (see below)
+    - create a `main.typst` file and include your typst files inside if needed
+	- hints should appear (if not use `set filetype=typst` to force the type)
+		- first check takes longer
+
 
 ## LSP Options
 
