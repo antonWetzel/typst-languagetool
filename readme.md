@@ -58,23 +58,28 @@ If another region is desired, it can be specified in the language parameter.
 ## LanguageTool Backend
 
 - different LanguageTool backends can be used to check the text
+- atleast one backend must be enabled for `cargo install ...` with `--features=<backend>`
+- one backend must be selected for `typst-languagetool ...` with the required flags
 
 ### Bundled
 
-- requires maven
+- typst-languagetool starts a LanguageTool instance with JNI
+- requires maven and the executable is not portable
 - add feature `bundle-jar`
-- specify `--bundled`
+- specify flag `--bundled`
 
 ### External JAR
 
+- typst-languagetool starts a LanguageTool instance with JNI
 - requires JAR with languagetool
-- add feature `external-jar`
-- specify `jar_location=...`
+- add feature  `external-jar`
+- specify flag `jar_location=<path>`
 
 ### Remote Server
 
+- typst-languagetool connects to a running LanguageTool server
 - add feature `remote-server`
-- specify `host=...` and `port=...`
+- specify flags `host=<host>` and `port=<port>`
 
 ## Usage
 
@@ -86,7 +91,7 @@ If another region is desired, it can be specified in the language parameter.
 		- `typst-languagetool watch ...`
 	- Path to check
 		- `typst-languagetool watch --path=<directory or file>`
-		- `typst-languagetool cehck --path=<file>`
+		- `typst-languagetool check --path=<file>`
 	- Different main file can be used
 		- defaults to path
 		- `--main=<file>`

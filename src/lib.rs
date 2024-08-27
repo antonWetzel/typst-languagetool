@@ -3,12 +3,20 @@ pub mod convert;
 
 use std::ops::Range;
 
+#[allow(unused_imports)]
 pub use backends::*;
 use convert::Mapping;
 use typst::{
 	syntax::{FileId, Source},
 	World,
 };
+
+#[cfg(not(any(
+	feature = "bundle-jar",
+	feature = "extern-jar",
+	feature = "remote-server",
+)))]
+compile_error!("No backends enabled, the backends can be enabled with feature flags");
 
 #[allow(async_fn_in_trait)]
 pub trait LanguageToolBackend {
@@ -68,6 +76,9 @@ impl LanguageToolBackend for LanguageTool {
 			Self::JNI(lt) => lt.allow_words(lang, words).await,
 			#[cfg(feature = "remote-server")]
 			Self::Remote(lt) => lt.allow_words(lang, words).await,
+
+			#[allow(unreachable_patterns)]
+			_ => unreachable!("{:?} {:?}", lang, words),
 		}
 	}
 	async fn disable_checks(&mut self, lang: String, checks: &[String]) -> anyhow::Result<()> {
@@ -76,6 +87,9 @@ impl LanguageToolBackend for LanguageTool {
 			Self::JNI(lt) => lt.disable_checks(lang, checks).await,
 			#[cfg(feature = "remote-server")]
 			Self::Remote(lt) => lt.disable_checks(lang, checks).await,
+
+			#[allow(unreachable_patterns)]
+			_ => unreachable!("{:?} {:?}", lang, checks),
 		}
 	}
 	async fn check_text(&mut self, lang: String, text: &str) -> anyhow::Result<Vec<Suggestion>> {
@@ -84,6 +98,9 @@ impl LanguageToolBackend for LanguageTool {
 			Self::JNI(lt) => lt.check_text(lang, text).await,
 			#[cfg(feature = "remote-server")]
 			Self::Remote(lt) => lt.check_text(lang, text).await,
+
+			#[allow(unreachable_patterns)]
+			_ => unreachable!("{:?} {:?}", lang, text),
 		}
 	}
 }
