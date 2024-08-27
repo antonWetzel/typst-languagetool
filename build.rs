@@ -16,12 +16,16 @@ fn main() {
 			"mvn"
 		};
 		let output = std::process::Command::new(command)
-			.current_dir(std::env::current_dir().unwrap().join("maven"))
+			.current_dir(
+				std::env::current_dir()
+					.expect("Failed to get current directory.")
+					.join("maven"),
+			)
 			.arg("clean")
 			.arg("install")
 			.output()
-			.unwrap();
-		let text = String::from_utf8(output.stdout).unwrap();
+			.expect("Failed to execute \"mvn\", is maven installed?");
+		let text = String::from_utf8(output.stdout).expect("Maven output not falid utf8.");
 		if output.status.success().not() {
 			panic!("{}", text);
 		}
@@ -35,12 +39,12 @@ fn main() {
 				let (_, target) = line.split_once(" to ")?;
 				Some(target)
 			})
-			.unwrap();
+			.expect("Failed to get the jar location from the maven output.");
 		println!("cargo::warning=JAR at {:?}.", location);
-		let out_dir = env::var("OUT_DIR").unwrap();
+		let out_dir = env::var("OUT_DIR").expect("Failed to get \"OUT_DIR\".");
 		let dest_path = Path::new(&out_dir).join("jar_path.rs");
-		let mut f = std::fs::File::create(&dest_path).unwrap();
+		let mut f = std::fs::File::create(&dest_path).expect("Failed to create source file.");
 		f.write_all(format!("r###\"{}\"###", location).as_bytes())
-			.unwrap();
+			.expect("Failed to write to source file");
 	}
 }
