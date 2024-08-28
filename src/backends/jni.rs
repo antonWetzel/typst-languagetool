@@ -33,7 +33,7 @@ impl LanguageToolJNI {
 
 	pub fn new_bundled() -> anyhow::Result<Self> {
 		#[cfg(feature = "bundle-jar")]
-		let path = include!(concat!(env!("OUT_DIR"), "./jar_path.rs"));
+		let path = include!(concat!(env!("OUT_DIR"), "/jar_path.rs"));
 
 		#[cfg(not(feature = "bundle-jar"))]
 		let path = Err(anyhow::anyhow!("Feature 'bundle-jar' not enabled."))?;
