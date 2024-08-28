@@ -92,8 +92,9 @@ If another region is desired, it can be specified in the language parameter.
 	- Path to check
 		- `typst-languagetool watch --path=<directory or file>`
 		- `typst-languagetool check --path=<file>`
-	- Different main file can be used
-		- defaults to path
+	- Main file of the document
+		- defaults to path if not specified
+		- check the complete document if a path is not specified
 		- `--main=<file>`
 	- Project root can be changed
 		- defaults to main parent folder
