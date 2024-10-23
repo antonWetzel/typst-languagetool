@@ -170,14 +170,14 @@ async fn handle_file(
 	let mut next_cache = Cache::new();
 	for (text, mapping) in paragraphs {
 		let lang = mapping.long_language();
-		let suggestions = if let Some(suggestions) = cache.get(&text) {
+		let suggestions = if let Some(suggestions) = cache.get(&text, &lang) {
 			suggestions
 		} else {
-			lt.check_text(lang, &text).await?
+			lt.check_text(lang.clone(), &text).await?
 		};
 
 		collector.add(&world, &suggestions, &mapping);
-		next_cache.insert(text, suggestions);
+		next_cache.insert(text, lang, suggestions);
 	}
 	*cache = next_cache;
 
@@ -235,7 +235,7 @@ fn pretty_start() {
 
 #[derive(Debug)]
 struct Cache {
-	cache: HashMap<String, Vec<Suggestion>>,
+	cache: HashMap<String, (String, Vec<Suggestion>)>,
 }
 
 impl Cache {
@@ -243,11 +243,12 @@ impl Cache {
 		Self { cache: HashMap::new() }
 	}
 
-	pub fn get(&mut self, text: &str) -> Option<Vec<Suggestion>> {
-		self.cache.remove(text)
+	pub fn get(&mut self, text: &str, lang: &str) -> Option<Vec<Suggestion>> {
+		let entry = self.cache.remove(text)?;
+		(lang == entry.0).then_some(entry.1)
 	}
 
-	pub fn insert(&mut self, text: String, suggestions: Vec<Suggestion>) {
-		self.cache.insert(text, suggestions);
+	pub fn insert(&mut self, text: String, lang: String, suggestions: Vec<Suggestion>) {
+		self.cache.insert(text, (lang, suggestions));
 	}
 }

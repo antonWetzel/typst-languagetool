@@ -499,14 +499,14 @@ impl State {
 				.get(mapping.short_language())
 				.map(|x| x.clone())
 				.unwrap_or(mapping.long_language());
-			let suggestions = if let Some(suggestions) = self.cache.get(&text) {
+			let suggestions = if let Some(suggestions) = self.cache.get(&text, &lang) {
 				suggestions
 			} else {
 				eprintln!("Checking {}/{}", idx + 1, l);
-				self.lt.check_text(lang, &text).await?
+				self.lt.check_text(lang.clone(), &text).await?
 			};
 			collector.add(&world, &suggestions, &mapping);
-			next_cache.insert(text, suggestions);
+			next_cache.insert(text, lang, suggestions);
 		}
 		self.cache = next_cache;
 		eprintln!("Generating diagnostics");
@@ -596,7 +596,7 @@ where
 
 #[derive(Debug)]
 struct Cache {
-	cache: HashMap<String, Vec<Suggestion>>,
+	cache: HashMap<String, (String, Vec<Suggestion>)>,
 }
 
 impl Cache {
@@ -604,12 +604,13 @@ impl Cache {
 		Self { cache: HashMap::new() }
 	}
 
-	pub fn get(&mut self, text: &str) -> Option<Vec<Suggestion>> {
-		self.cache.remove(text)
+	pub fn get(&mut self, text: &str, lang: &str) -> Option<Vec<Suggestion>> {
+		let entry = self.cache.remove(text)?;
+		(lang == entry.0).then_some(entry.1)
 	}
 
-	pub fn insert(&mut self, text: String, suggestions: Vec<Suggestion>) {
-		self.cache.insert(text, suggestions);
+	pub fn insert(&mut self, text: String, lang: String, suggestions: Vec<Suggestion>) {
+		self.cache.insert(text, (lang, suggestions));
 	}
 }
 
