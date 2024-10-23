@@ -7,8 +7,7 @@ edition = "2021"
 
 [dependencies]
 typst.workspace = true
-comemo.workspace = true
+typst-kit.workspace = true
+
 chrono.workspace = true
 dirs.workspace = true
-typst-assets.workspace = true
-fontdb.workspace = true

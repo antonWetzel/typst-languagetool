@@ -1,6 +1,3 @@
-mod fonts;
-mod package;
-
 use std::{
 	collections::HashMap,
 	ops::Deref,
@@ -8,24 +5,30 @@ use std::{
 };
 
 use chrono::{DateTime, Datelike, FixedOffset, Local, Utc};
-use comemo::Prehashed;
-use fonts::FontManager;
 use typst::{
 	diag::{FileError, FileResult, SourceResult},
-	eval::Tracer,
 	foundations::{Dict, Value},
 	model::Document,
 	syntax::{FileId, Source, VirtualPath},
 	text::Font,
+	utils::LazyHash,
 	Library, World,
+};
+use typst_kit::{
+	download::Downloader,
+	fonts::{FontSlot, Fonts},
+	package::PackageStorage,
 };
 
 #[derive(Debug)]
 pub struct LtWorld {
-	library: Prehashed<Library>,
+	library: LazyHash<Library>,
 	now: DateTime<Utc>,
 
-	font_manager: FontManager,
+	packages: PackageStorage,
+
+	fonts: Vec<FontSlot>,
+	font_book: LazyHash<typst::text::FontBook>,
 	shadow_files: HashMap<FileId, Source>,
 	root: PathBuf,
 }
@@ -41,10 +44,19 @@ impl LtWorld {
 		inputs.insert("spellcheck".into(), Value::Bool(true));
 		let root = root.canonicalize().unwrap();
 
+		let fonts = Fonts::searcher()
+			.include_embedded_fonts(true)
+			.include_system_fonts(true)
+			.search();
+
 		Self {
-			library: Prehashed::new(Library::builder().with_inputs(inputs).build()),
+			library: LazyHash::new(Library::builder().with_inputs(inputs).build()),
 			now: chrono::Utc::now(),
-			font_manager: FontManager::new(),
+
+			packages: PackageStorage::new(None, None, Downloader::new("typst-languagetool")),
+
+			font_book: LazyHash::new(fonts.book),
+			fonts: fonts.fonts,
 			root,
 			shadow_files: HashMap::new(),
 		}
@@ -83,7 +95,9 @@ impl LtWorld {
 
 	pub fn path(&self, file_id: FileId) -> typst::diag::FileResult<PathBuf> {
 		let path = if let Some(spec) = file_id.package() {
-			crate::package::prepare_package(spec)?.join(file_id.vpath().as_rootless_path())
+			self.packages
+				.prepare_package(&spec, &mut Progress)?
+				.join(file_id.vpath().as_rootless_path())
 		} else {
 			self.root.join(file_id.vpath().as_rootless_path())
 		};
@@ -115,13 +129,12 @@ impl Deref for LtWorldRunning<'_> {
 
 impl LtWorldRunning<'_> {
 	pub fn compile(&self) -> SourceResult<Document> {
-		let mut tracer = Tracer::new();
-		typst::compile(self, &mut tracer)
+		typst::compile(self).output
 	}
 }
 
 impl World for LtWorldRunning<'_> {
-	fn library(&self) -> &Prehashed<Library> {
+	fn library(&self) -> &LazyHash<Library> {
 		&self.library
 	}
 
@@ -141,12 +154,12 @@ impl World for LtWorldRunning<'_> {
 		)
 	}
 
-	fn book(&self) -> &Prehashed<typst::text::FontBook> {
-		self.font_manager.book()
+	fn book(&self) -> &LazyHash<typst::text::FontBook> {
+		&self.font_book
 	}
 
-	fn main(&self) -> typst::syntax::Source {
-		self.source(self.main).unwrap()
+	fn main(&self) -> FileId {
+		self.main
 	}
 
 	fn source(&self, id: FileId) -> typst::diag::FileResult<typst::syntax::Source> {
@@ -172,6 +185,16 @@ impl World for LtWorldRunning<'_> {
 	}
 
 	fn font(&self, index: usize) -> Option<Font> {
-		self.font_manager.get(index)
+		self.fonts[index].get()
 	}
+}
+
+struct Progress;
+
+impl typst_kit::download::Progress for Progress {
+	fn print_start(&mut self) {}
+
+	fn print_progress(&mut self, _state: &typst_kit::download::DownloadState) {}
+
+	fn print_finish(&mut self, _state: &typst_kit::download::DownloadState) {}
 }

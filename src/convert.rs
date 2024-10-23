@@ -207,7 +207,6 @@ impl Converter {
 		res: &mut Vec<(String, Mapping)>,
 		file_id: Option<FileId>,
 	) {
-		use typst::introspection::Meta as M;
 		use typst::layout::FrameItem as I;
 		match item {
 			I::Group(g) => self.frame(&g.frame, pos, res, file_id),
@@ -241,7 +240,7 @@ impl Converter {
 				}
 				assert_eq!(None, iter.next());
 			},
-			I::Meta(M::Link(..) | M::Elem(..) | M::Hide, _) | I::Shape(..) | I::Image(..) => {},
+			I::Link(..) | I::Tag(..) | I::Shape(..) | I::Image(..) => {},
 		}
 	}
 }
