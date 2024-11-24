@@ -1,5 +1,5 @@
-#[cfg(any(feature = "bundle-jar", feature = "extern-jar"))]
+#[cfg(any(feature = "bundle", feature = "jar"))]
 pub mod jni;
 
-#[cfg(feature = "remote-server")]
+#[cfg(feature = "server")]
 pub mod remote;

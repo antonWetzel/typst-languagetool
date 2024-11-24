@@ -1,0 +1,14 @@
+{
+    "backend": "server",
+    "host": "http://127.0.0.1",
+    "port": "8081",
+    "dictionary": {
+        "de-DE": [
+            "Wowow"
+        ],
+        "en-GB": [
+            "Sprache"
+        ]
+    },
+    "disabled_checks": {}
+}

@@ -32,10 +32,10 @@ impl LanguageToolJNI {
 	}
 
 	pub fn new_bundled() -> anyhow::Result<Self> {
-		#[cfg(feature = "bundle-jar")]
+		#[cfg(feature = "bundle")]
 		let path = include!(concat!(env!("OUT_DIR"), "/jar_path.rs"));
 
-		#[cfg(not(feature = "bundle-jar"))]
+		#[cfg(not(feature = "bundle"))]
 		let path = Err(anyhow::anyhow!("Feature 'bundle-jar' not enabled."))?;
 
 		let jvm = new_jvm(path)?;

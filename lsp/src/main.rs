@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs::File;
 use std::path::{Path, PathBuf};
 
 use anyhow::Context;
@@ -11,85 +12,24 @@ use lt_world::LtWorld;
 use serde_json::Value;
 use typst::syntax::Source;
 use typst::World;
-use typst_languagetool::{LanguageTool, LanguageToolBackend, Suggestion};
+use typst_languagetool::{LanguageTool, LanguageToolBackend, LanguageToolOptions, Suggestion};
 
-#[derive(serde::Serialize, serde::Deserialize, Debug, Clone)]
+#[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 struct InitOptions {
-	/// Additional allowed words
-	dictionary: HashMap<String, Vec<String>>,
-	/// Languagetool rules to ignore (WHITESPACE_RULE, ...)
-	disabled_checks: HashMap<String, Vec<String>>,
-
-	languages: Vec<String>,
-
-	/// use bundled languagetool
-	bundled: bool,
-	/// use external JAR for languagetool
-	jar_location: Option<String>,
-	/// host for remote languagetool
-	host: Option<String>,
-	/// port for remote languagetool
-	port: Option<String>,
-
-	/// Size for chunk send to LanguageTool
-	chunk_size: usize,
 	/// Duration to wait for additional changes before checking the file
 	/// Leave empty to only check on open and save
 	#[serde(with = "humantime_serde")]
 	on_change: Option<std::time::Duration>,
 
-	/// Project Root
-	root: Option<PathBuf>,
-	/// Project Main File
-	main: Option<PathBuf>,
-}
+	/// Path to JSON with configuration.
+	options: Option<PathBuf>,
 
-impl Default for InitOptions {
-	fn default() -> Self {
-		Self {
-			dictionary: HashMap::new(),
-			disabled_checks: HashMap::new(),
-			languages: Vec::new(),
-
-			bundled: false,
-			jar_location: None,
-			host: None,
-			port: None,
-
-			chunk_size: 1000,
-			on_change: None,
-
-			root: None,
-			main: None,
-		}
-	}
-}
-
-fn create_language_map(codes: Vec<String>) -> HashMap<String, String> {
-	codes
-		.into_iter()
-		.map(|lang| (lang.split('-').next().unwrap_or("").to_owned(), lang))
-		.collect()
+	#[serde(flatten)]
+	lt: LanguageToolOptions,
 }
 
 impl InitOptions {
-	async fn create_lt(&self) -> anyhow::Result<LanguageTool> {
-		let mut lt = LanguageTool::new(
-			self.bundled,
-			self.jar_location.as_ref(),
-			self.host.as_ref(),
-			self.port.as_ref(),
-		)?;
-		for (lang, dict) in &self.dictionary {
-			lt.allow_words(lang.clone(), dict).await?;
-		}
-		for (lang, checks) in &self.disabled_checks {
-			lt.disable_checks(lang.clone(), checks).await?;
-		}
-		Ok(lt)
-	}
-
 	fn make_absolute(&mut self) {
 		fn make_absolute(cwd: &Path, path: &mut Option<PathBuf>) {
 			if let Some(path) = path {
@@ -100,8 +40,8 @@ impl InitOptions {
 			}
 		}
 		let cwd = std::env::current_dir().unwrap();
-		make_absolute(&cwd, &mut self.main);
-		make_absolute(&cwd, &mut self.root);
+		make_absolute(&cwd, &mut self.lt.main);
+		make_absolute(&cwd, &mut self.lt.root);
 	}
 }
 
@@ -181,13 +121,19 @@ impl State {
 			eprintln!("Unknown option: {}", path);
 		})?;
 
+		if let Some(path) = &options.options {
+			let file = File::open(path)?;
+			let file_options = serde_json::from_reader::<_, LanguageToolOptions>(file)?;
+			options.lt = file_options.overwrite(options.lt);
+		}
+
 		let cache = Cache::new();
 
 		options.make_absolute();
 		eprintln!("Options: {:#?}", options);
-		let lt = options.create_lt().await?;
+		let lt = LanguageTool::new(&options.lt).await?;
 
-		let world = lt_world::LtWorld::new(options.root.clone().unwrap_or_else(|| ".".into()));
+		let world = lt_world::LtWorld::new(options.lt.root.clone().unwrap_or_else(|| ".".into()));
 
 		eprintln!("Compiling document");
 
@@ -200,9 +146,9 @@ impl State {
 
 			options: Options {
 				on_change: options.on_change,
-				chunk_size: options.chunk_size,
-				language_codes: create_language_map(options.languages),
-				main: options.main,
+				chunk_size: options.lt.chunk_size,
+				language_codes: options.lt.languages,
+				main: options.lt.main,
 			},
 		})
 	}
@@ -441,10 +387,16 @@ impl State {
 				},
 			};
 
+		if let Some(path) = &options.options {
+			let file = File::open(path)?;
+			let file_options = serde_json::from_reader::<_, LanguageToolOptions>(file)?;
+			options.lt = file_options.overwrite(options.lt);
+		}
+
 		options.make_absolute();
 		eprintln!("Options: {:#?}", options);
 
-		self.lt = match options.create_lt().await {
+		self.lt = match LanguageTool::new(&options.lt).await {
 			Ok(lt) => lt,
 			Err(err) => {
 				eprintln!("{}", err);
@@ -452,15 +404,15 @@ impl State {
 			},
 		};
 
-		if let Some(root) = options.root {
+		if let Some(root) = options.lt.root {
 			self.world = LtWorld::new(root);
 		}
 
 		self.options = Options {
 			on_change: options.on_change,
-			chunk_size: options.chunk_size,
-			language_codes: create_language_map(options.languages),
-			main: options.main,
+			chunk_size: options.lt.chunk_size,
+			language_codes: options.lt.languages,
+			main: options.lt.main,
 		};
 
 		Ok(())

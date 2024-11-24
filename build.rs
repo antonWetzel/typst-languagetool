@@ -1,7 +1,7 @@
 fn main() {
 	println!("cargo::rerun-if-changed=build.rs");
 
-	#[cfg(feature = "bundle-jar")]
+	#[cfg(feature = "bundle")]
 	{
 		use std::env;
 		use std::io::Write;

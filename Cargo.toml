@@ -17,9 +17,9 @@ members = [".", "cli", "lsp", "lt-world"]
 
 [features]
 default = []
-bundle-jar = ["dep:jni"]
-extern-jar = ["dep:jni"]
-remote-server = ["dep:languagetool-rust"]
+bundle = ["dep:jni"]
+jar = ["dep:jni"]
+server = ["dep:languagetool-rust"]
 
 
 [workspace.dependencies]

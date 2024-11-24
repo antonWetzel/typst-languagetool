@@ -8,10 +8,13 @@ use lt_world::LtWorld;
 use notify::RecursiveMode;
 use notify_debouncer_mini::new_debouncer;
 use typst::World;
-use typst_languagetool::{LanguageTool, LanguageToolBackend, Suggestion};
+use typst_languagetool::{
+	BackendOptions, LanguageTool, LanguageToolBackend, LanguageToolOptions, Suggestion,
+};
 
 use std::{
 	collections::HashMap,
+	fs::File,
 	ops::Not,
 	path::{Path, PathBuf},
 	time::Duration,
@@ -24,7 +27,7 @@ enum Task {
 }
 
 #[derive(Parser, Debug)]
-struct Args {
+struct CliArgs {
 	task: Task,
 
 	/// File to check, may be a folder with `watch`.
@@ -54,7 +57,7 @@ struct Args {
 
 	/// Use bundled languagetool jar.
 	#[clap(long, default_value_t = false)]
-	bundled: bool,
+	bundle: bool,
 
 	/// Custom location for the languagetool jar.
 	#[clap(long, default_value = None)]
@@ -67,20 +70,67 @@ struct Args {
 	/// Port for remote languagetool server.
 	#[clap(long, default_value = None)]
 	port: Option<String>,
+
+	/// Path to JSON with configuration.
+	#[clap(long, default_value = None)]
+	options: Option<PathBuf>,
+}
+
+struct Args {
+	task: Task,
+	path: Option<PathBuf>,
+	delay: f64,
+	plain: bool,
+	lt: LanguageToolOptions,
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-	let args = Args::parse();
+	let cli_args = CliArgs::parse();
 
-	let lt = LanguageTool::new(
-		args.bundled,
-		args.jar_location.as_ref(),
-		args.host.as_ref(),
-		args.port.as_ref(),
-	)?;
+	let backend = match (
+		cli_args.bundle,
+		cli_args.jar_location,
+		cli_args.host,
+		cli_args.port,
+	) {
+		(false, None, None, None) => BackendOptions::None,
+		(true, None, None, None) => BackendOptions::Bundle,
+		(false, Some(path), None, None) => BackendOptions::Jar { jar_location: path },
+		(false, None, Some(host), Some(port)) => BackendOptions::Remote { host, port },
 
-	let world = lt_world::LtWorld::new(args.root.clone().unwrap_or(".".into()));
+		_ => Err(anyhow::anyhow!(
+			"Exactly one of 'bundled', 'jar_location' or 'host and port' must be specified."
+		))?,
+	};
+
+	let mut args = Args {
+		task: cli_args.task,
+		path: cli_args.path,
+		delay: cli_args.delay,
+		plain: cli_args.plain,
+		lt: LanguageToolOptions {
+			root: cli_args.root,
+			main: cli_args.main,
+			chunk_size: cli_args.chunk_size,
+			backend,
+			languages: HashMap::new(),
+			dictionary: HashMap::new(),
+			disabled_checks: HashMap::new(),
+		},
+	};
+
+	if let Some(path) = cli_args.options {
+		let file = File::open(path)?;
+		let file_options = serde_json::from_reader::<_, LanguageToolOptions>(file)?;
+		args.lt = file_options.overwrite(args.lt);
+	}
+
+	let args = args;
+
+	let lt = LanguageTool::new(&args.lt).await?;
+
+	let world = lt_world::LtWorld::new(args.lt.root.clone().unwrap_or(".".into()));
 
 	match args.task {
 		Task::Check => check(args, lt, world).await?,
@@ -94,12 +144,12 @@ async fn check(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::
 	handle_file(
 		args.path
 			.as_ref()
-			.or_else(|| args.main.as_ref())
+			.or_else(|| args.lt.main.as_ref())
 			.context("No path or main specified")?,
 		&mut lt,
 		&args,
 		&mut world,
-		args.chunk_size,
+		args.lt.chunk_size,
 		&mut Cache::new(),
 		args.path.is_none(),
 	)
@@ -127,7 +177,7 @@ async fn watch(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::
 				&mut lt,
 				&args,
 				&mut world,
-				args.chunk_size,
+				args.lt.chunk_size,
 				&mut cache,
 				false,
 			)
@@ -146,7 +196,7 @@ async fn handle_file(
 	cache: &mut Cache,
 	include_all: bool,
 ) -> anyhow::Result<()> {
-	let world = world.with_main(args.main.clone().unwrap_or(path.to_owned()));
+	let world = world.with_main(args.lt.main.clone().unwrap_or(path.to_owned()));
 	let doc = match world.compile() {
 		Ok(doc) => doc,
 		Err(err) => {

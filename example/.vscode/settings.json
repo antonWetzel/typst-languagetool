@@ -9,7 +9,7 @@
             "language": "typst",
             "lsp": "typst-languagetool-lsp",
             "options": {
-                "bundled": true,
+                "backend": "bundle",
                 // "host": "http://127.0.0.1",
                 // "port": "8081",
                 // "main": "./main.typ",
