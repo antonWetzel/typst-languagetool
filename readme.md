@@ -15,7 +15,7 @@ Spellcheck typst files with LanguageTool.
 - atleast one backend must be enabled for `cargo install ...` with `--features=<backend>`
 - one backend must be selected for `typst-languagetool ...` with the required flags
 
-### Bundled
+### Bundle
 
 - typst-languagetool starts a LanguageTool instance with JNI
 - requires maven and the executable is not portable
@@ -29,10 +29,10 @@ Spellcheck typst files with LanguageTool.
 - add feature  `jar`
 - specify flag `jar_location=<path>` for cli or `"backend: "jar"` and `"jar-location": <path>` for LSP
 
-### Remote Server
+### Server
 
 - typst-languagetool connects to a running LanguageTool server
-- add feature `remote-server`
+- add feature `server`
 - specify flags `host=<host>` and `port=<port>` for cli or `"backend: "server"`, `"host: <host>` and `"port": <port>` for LSP
 
 ## Usage
@@ -84,11 +84,11 @@ languages: HashMap<String, String>,
 
 /// use bundled languagetool
 backend: "bundle" | "jar" | "server",
-/// path for extern-jar backend
+/// path for jar backend
 jar_location: Option<String>,
-/// host for extern-server backend
+/// host for server backend
 host: Option<String>,
-/// port for extern-server backend
+/// port for server backend
 port: Option<String>,
 
 /// Size for a text chunk to send to LanguageTool
