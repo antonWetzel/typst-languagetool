@@ -94,11 +94,10 @@ async fn main() -> anyhow::Result<()> {
 		cli_args.host,
 		cli_args.port,
 	) {
-		(false, None, None, None) => BackendOptions::None,
-		(true, None, None, None) => BackendOptions::Bundle,
-		(false, Some(path), None, None) => BackendOptions::Jar { jar_location: path },
-		(false, None, Some(host), Some(port)) => BackendOptions::Remote { host, port },
-
+		(false, None, None, None) => None,
+		(true, None, None, None) => Some(BackendOptions::Bundle),
+		(false, Some(path), None, None) => Some(BackendOptions::Jar { jar_location: path }),
+		(false, None, Some(host), Some(port)) => Some(BackendOptions::Remote { host, port }),
 		_ => Err(anyhow::anyhow!(
 			"Exactly one of 'bundled', 'jar_location' or 'host and port' must be specified."
 		))?,

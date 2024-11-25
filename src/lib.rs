@@ -32,30 +32,32 @@ pub enum LanguageTool {
 impl LanguageTool {
 	pub async fn new(options: &LanguageToolOptions) -> anyhow::Result<Self> {
 		let mut lt = match &options.backend {
-			BackendOptions::None => Err(anyhow::anyhow!(
+			None => Err(anyhow::anyhow!(
 				"No Languagetool Backend (bundle, jar or server) specified."
 			))?,
 
 			#[cfg(feature = "bundle")]
-			BackendOptions::Bundle => Self::JNI(jni::LanguageToolJNI::new_bundled()?),
+			Some(BackendOptions::Bundle) => Self::JNI(jni::LanguageToolJNI::new_bundled()?),
 
 			#[cfg(not(feature = "bundle"))]
-			BackendOptions::Bundle => Err(anyhow::anyhow!("Feature 'bundle' is disabled."))?,
+			Some(BackendOptions::Bundle) => Err(anyhow::anyhow!("Feature 'bundle' is disabled."))?,
 
 			#[cfg(any(feature = "bundle", feature = "jar"))]
-			BackendOptions::Jar { jar_location } => Self::JNI(jni::LanguageToolJNI::new(jar_location)?),
+			Some(BackendOptions::Jar { jar_location }) => {
+				Self::JNI(jni::LanguageToolJNI::new(jar_location)?)
+			},
 			#[cfg(all(not(feature = "bundle"), not(feature = "jar")))]
-			BackendOptions::Jar { jar_location: _ } => {
+			Some(BackendOptions::Jar { jar_location: _ }) => {
 				Err(anyhow::anyhow!("Features 'bundle' and 'jar' are disabled."))?
 			},
 
 			#[cfg(feature = "server")]
-			BackendOptions::Remote { host, port } => {
+			Some(BackendOptions::Remote { host, port }) => {
 				Self::Remote(remote::LanguageToolRemote::new(host, port)?)
 			},
 
 			#[cfg(not(feature = "server"))]
-			BackendOptions::Remote { host: _, port: _ } => {
+			Some(BackendOptions::Remote { host: _, port: _ }) => {
 				Err(anyhow::anyhow!("Feature 'server' is disabled."))?
 			},
 		};
@@ -173,7 +175,7 @@ pub struct LanguageToolOptions {
 	pub chunk_size: usize,
 
 	#[serde(flatten)]
-	pub backend: BackendOptions,
+	pub backend: Option<BackendOptions>,
 
 	/// map for short to long language codes (`en -> en-US`)
 	pub languages: HashMap<String, String>,
@@ -186,8 +188,6 @@ pub struct LanguageToolOptions {
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "backend")]
 pub enum BackendOptions {
-	#[serde(rename = "none")]
-	None,
 	#[serde(rename = "bundle")]
 	Bundle,
 	#[serde(rename = "jar")]
@@ -203,7 +203,7 @@ impl Default for LanguageToolOptions {
 			main: None,
 			chunk_size: DEFAULT_CHUNK_SIZE,
 
-			backend: BackendOptions::None,
+			backend: None,
 
 			languages: HashMap::new(),
 			dictionary: HashMap::new(),
@@ -226,9 +226,7 @@ impl LanguageToolOptions {
 				.then_some(other.chunk_size)
 				.unwrap_or(self.chunk_size),
 
-			backend: (other.backend != BackendOptions::None)
-				.then_some(other.backend)
-				.unwrap_or(self.backend),
+			backend: other.backend.or(self.backend),
 
 			languages: self.languages,
 			dictionary: self.dictionary,
