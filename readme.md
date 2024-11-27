@@ -168,4 +168,11 @@ The compiled document contains the text language, but not the region.
 )
 ```
 The text language is used to determine the region code ("de-DE", ...).
-If another region is desired, it can be specified in the language parameter.
+If another region is desired, it can be specified in the languages parameter.
+
+```json
+languages: {
+	"en": "en-US",
+	"de": "de-DE",
+}
+``` 
