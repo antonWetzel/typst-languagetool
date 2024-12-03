@@ -12,6 +12,7 @@ if root_dir then
     filetype = { 'typst' },
     root_dir = root_dir,
     init_options = {
+      backend = "bundle", -- "bundle" | "jar" | "server"
       -- jar_location = "path/to/jar/location"
       -- host = "http://127.0.0.1",
       -- port = "8081",
