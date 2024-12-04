@@ -171,7 +171,7 @@ The text language is used to determine the region code ("de-DE", ...).
 If another region is desired, it can be specified in the languages parameter.
 
 ```json
-languages: {
+"languages": {
 	"en": "en-US",
 	"de": "de-DE",
 }
