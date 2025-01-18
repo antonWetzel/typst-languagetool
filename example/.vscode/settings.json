@@ -14,6 +14,7 @@
                 // "port": "8081",
                 // "main": "./main.typ",
                 // "root": ".",
+                // options: "./.typst-languagetool.json",
                 "on_change": "1000ms",
                 "dictionary": {
                     "de-DE": [
@@ -21,9 +22,10 @@
                     ],
                 },
                 "disabled_checks": {},
-                "languages": [
-                    "en-US",
-                ],
+                "languages": {
+                    "en": "en-US",
+                    "de": "de-DE",
+                }
             }
         }
     ]

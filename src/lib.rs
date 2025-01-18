@@ -193,7 +193,11 @@ pub enum BackendOptions {
 	#[serde(rename = "jar")]
 	Jar { jar_location: String },
 	#[serde(rename = "server")]
-	Remote { host: String, port: String },
+	Remote {
+		host: String,
+		#[serde(deserialize_with = "string_or_number")]
+		port: String,
+	},
 }
 
 impl Default for LanguageToolOptions {
@@ -233,4 +237,55 @@ impl LanguageToolOptions {
 			disabled_checks: self.disabled_checks,
 		}
 	}
+}
+
+fn string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+	D: serde::Deserializer<'de>,
+{
+	struct StringOrNumberVisitor;
+
+	impl<'de> serde::de::Visitor<'de> for StringOrNumberVisitor {
+		type Value = String;
+
+		fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+			formatter.write_str("a string or a number")
+		}
+
+		fn visit_str<E>(self, value: &str) -> Result<Self::Value, E>
+		where
+			E: serde::de::Error,
+		{
+			Ok(value.to_string())
+		}
+
+		fn visit_string<E>(self, value: String) -> Result<Self::Value, E>
+		where
+			E: serde::de::Error,
+		{
+			Ok(value)
+		}
+
+		fn visit_i64<E>(self, value: i64) -> Result<Self::Value, E>
+		where
+			E: serde::de::Error,
+		{
+			Ok(value.to_string())
+		}
+
+		fn visit_u64<E>(self, value: u64) -> Result<Self::Value, E>
+		where
+			E: serde::de::Error,
+		{
+			Ok(value.to_string())
+		}
+
+		fn visit_f64<E>(self, value: f64) -> Result<Self::Value, E>
+		where
+			E: serde::de::Error,
+		{
+			Ok(value.to_string())
+		}
+	}
+	deserializer.deserialize_any(StringOrNumberVisitor)
 }

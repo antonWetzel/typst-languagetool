@@ -25,7 +25,9 @@ impl LanguageToolRemote {
 impl LanguageToolBackend for LanguageToolRemote {
 	async fn allow_words(&mut self, lang: String, words: &[String]) -> anyhow::Result<()> {
 		self.allowed_words
-			.insert(lang, words.iter().cloned().collect());
+			.entry(lang)
+			.or_default()
+			.extend(words.iter().map(Clone::clone));
 		Ok(())
 	}
 
