@@ -7,8 +7,8 @@ use std::{collections::HashMap, ops::Range, path::PathBuf};
 pub use backends::*;
 use convert::Mapping;
 use typst::{
-	syntax::{FileId, Source},
 	World,
+	syntax::{FileId, Source},
 };
 
 #[cfg(not(any(feature = "bundle", feature = "jar", feature = "server",)))]

@@ -1,11 +1,10 @@
 use std::ops::Range;
 
 use typst::{
-	layout::{Abs, Em, Point},
-	model::Document,
+	World,
+	layout::{Abs, Em, PagedDocument, Point},
 	syntax::{FileId, Source, Span, SyntaxKind},
 	text::{Lang, TextItem},
-	World,
 };
 
 use crate::Suggestion;
@@ -101,7 +100,7 @@ impl Mapping {
 const LINE_SPACING: Em = Em::new(0.65);
 
 pub fn document(
-	doc: &Document,
+	doc: &PagedDocument,
 	chunk_size: usize,
 	file_id: Option<FileId>,
 ) -> Vec<(String, Mapping)> {

@@ -6,13 +6,13 @@ use std::{
 
 use chrono::{DateTime, Datelike, FixedOffset, Local, Utc};
 use typst::{
+	Library, World,
 	diag::{FileError, FileResult, SourceResult},
 	foundations::{Dict, Value},
-	model::Document,
+	layout::PagedDocument,
 	syntax::{FileId, Source, VirtualPath},
 	text::Font,
 	utils::LazyHash,
-	Library, World,
 };
 use typst_kit::{
 	download::Downloader,
@@ -128,7 +128,7 @@ impl Deref for LtWorldRunning<'_> {
 }
 
 impl LtWorldRunning<'_> {
-	pub fn compile(&self) -> SourceResult<Document> {
+	pub fn compile(&self) -> SourceResult<PagedDocument> {
 		typst::compile(self).output
 	}
 }
@@ -181,7 +181,7 @@ impl World for LtWorldRunning<'_> {
 		let Ok(bytes) = std::fs::read(&path) else {
 			return Err(FileError::NotFound(path));
 		};
-		Ok(bytes.into())
+		Ok(typst::foundations::Bytes::new(bytes))
 	}
 
 	fn font(&self, index: usize) -> Option<Font> {

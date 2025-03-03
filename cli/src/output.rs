@@ -1,4 +1,4 @@
-use std::{io::stdout, io::Write, ops::Not, path::Path};
+use std::{io::Write, io::stdout, ops::Not, path::Path};
 
 use annotate_snippets::{Level, Renderer, Snippet};
 use typst::syntax::Source;
@@ -69,7 +69,7 @@ pub fn pretty(file: &Path, source: &Source, diagnostic: Diagnostic) {
 		.filter(|replacement| replacement.trim().is_empty().not())
 		.take(MAX_SUGGESTIONS)
 	{
-		snippet = snippet.annotation(Level::Help.span(end..end).label(&replacement));
+		snippet = snippet.annotation(Level::Help.span(start..end).label(&replacement));
 	}
 	let message = Level::Info
 		.title(&diagnostic.rule_description)

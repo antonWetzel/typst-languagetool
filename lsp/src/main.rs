@@ -10,8 +10,8 @@ use lsp_types::request::*;
 use lsp_types::*;
 use lt_world::LtWorld;
 use serde_json::Value;
-use typst::syntax::Source;
 use typst::World;
+use typst::syntax::Source;
 use typst_languagetool::{LanguageTool, LanguageToolBackend, LanguageToolOptions, Suggestion};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
