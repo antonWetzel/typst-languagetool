@@ -1408,9 +1408,9 @@ dependencies = [
 
 [[package]]
 name = "languagetool-rust"
-version = "2.1.4"
+version = "2.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "242e2a8ec49c86d3044354c020c9838c8ff85ff2121a9b5562abebda41fc5bbc"
+checksum = "04508170152a42817f6b5a016e550afa7e4822ae395ed7e4df38bad0f775a220"
 dependencies = [
  "annotate-snippets 0.9.2",
  "clap",
