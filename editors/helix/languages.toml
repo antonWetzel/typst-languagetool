@@ -1,0 +1,10 @@
+[[language]]
+name = "typst"
+auto-format = true
+language-servers = ["tinymist", "typst-languagetool"]
+
+[language-server.typst-languagetool]
+command = "typst-languagetool-lsp"
+# config = {backend="bundle"}
+config = { options = "~/.config/helix/typst-languagetool.json" }
+

@@ -1,0 +1,16 @@
+{
+  "backend": "bundle",
+  "dictionary": {
+    "de-DE": [],
+    "en-GB": [
+      "foobar"
+    ]
+  },
+  "disabled_checks": {
+    "de-DE": [
+      "UPPERCASE_SENTENCE_START"
+    ],
+    "en-GB": []
+  },
+  "on_change": 200
+}
