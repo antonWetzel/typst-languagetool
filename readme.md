@@ -78,9 +78,10 @@ Spellcheck typst files with LanguageTool.
 dictionary: HashMap<String, Vec<String>>,
 /// Languagetool rules to ignore (WHITESPACE_RULE, ...) for language codes
 disabled_checks: HashMap<String, Vec<String>>,
-
 /// preferred language codes
 languages: HashMap<String, String>,
+/// Functions calls to ignore (lorem, bibliography, ...)
+ignore_functions: HashSet<String>,
 
 /// use bundled languagetool
 backend: "bundle" | "jar" | "server",

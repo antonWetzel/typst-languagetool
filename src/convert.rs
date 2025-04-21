@@ -1,4 +1,4 @@
-use std::ops::Range;
+use std::{collections::HashSet, ops::Range};
 
 use typst::{
 	World,
@@ -21,6 +21,7 @@ impl Mapping {
 		suggestion: &Suggestion,
 		world: &impl World,
 		source: Option<&Source>,
+		ignore_functions: &HashSet<String>,
 	) -> Vec<(FileId, Range<usize>)> {
 		let chars = &self.chars[suggestion.start..suggestion.end];
 		let mut locations = Vec::<(FileId, Range<usize>)>::new();
@@ -43,23 +44,29 @@ impl Mapping {
 			let Some(node) = source.find(span) else {
 				continue;
 			};
-			if node.kind() == SyntaxKind::Text {
-				let start = node.range().start;
-				let range = (start + range.start as usize)..(start + range.end as usize);
-				match locations.last_mut() {
-					Some((last_id, last_range))
-						if *last_id == id && last_range.end == range.start =>
-					{
-						last_range.end = range.end
-					},
-					_ => locations.push((id, range)),
-				}
-			} else {
-				let range = node.range();
-				match locations.last_mut() {
-					Some((last_id, last_range)) if *last_id == id && *last_range == range => {},
-					_ => locations.push((id, range)),
-				}
+
+			match node.kind() {
+				SyntaxKind::Text => {
+					let start = node.range().start;
+					let range = (start + range.start as usize)..(start + range.end as usize);
+					match locations.last_mut() {
+						Some((last_id, last_range))
+							if *last_id == id && last_range.end == range.start =>
+						{
+							last_range.end = range.end
+						},
+						_ => locations.push((id, range)),
+					}
+				},
+				SyntaxKind::FuncCall
+					if ignore_functions.contains(node.leftmost_leaf().unwrap().text().as_str()) => {},
+				_ => {
+					let range = node.range();
+					match locations.last_mut() {
+						Some((last_id, last_range)) if *last_id == id && *last_range == range => {},
+						_ => locations.push((id, range)),
+					}
+				},
 			}
 		}
 		locations

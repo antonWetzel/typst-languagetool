@@ -1,7 +1,11 @@
 mod backends;
 pub mod convert;
 
-use std::{collections::HashMap, ops::Range, path::PathBuf};
+use std::{
+	collections::{HashMap, HashSet},
+	ops::Range,
+	path::PathBuf,
+};
 
 #[allow(unused_imports)]
 pub use backends::*;
@@ -120,9 +124,16 @@ impl FileCollector {
 		Self { source, diagnostics: Vec::new() }
 	}
 
-	pub fn add(&mut self, world: &impl World, suggestions: &[Suggestion], mapping: &Mapping) {
+	pub fn add(
+		&mut self,
+		world: &impl World,
+		suggestions: &[Suggestion],
+		mapping: &Mapping,
+		ignore_functions: &HashSet<String>,
+	) {
 		let diagnostics = suggestions.iter().filter_map(|suggestion| {
-			let locations = mapping.location(suggestion, world, self.source.as_ref());
+			let locations =
+				mapping.location(suggestion, world, self.source.as_ref(), ignore_functions);
 			if locations.is_empty() {
 				return None;
 			}
@@ -183,6 +194,8 @@ pub struct LanguageToolOptions {
 	pub dictionary: HashMap<String, Vec<String>>,
 	/// Languagetool rules to ignore (WHITESPACE_RULE, ...)
 	pub disabled_checks: HashMap<String, Vec<String>>,
+	/// Functions calls to ignore (lorem, bibliography, ...)
+	pub ignore_functions: HashSet<String>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, PartialEq, Eq)]
@@ -212,6 +225,9 @@ impl Default for LanguageToolOptions {
 			languages: HashMap::new(),
 			dictionary: HashMap::new(),
 			disabled_checks: HashMap::new(),
+			ignore_functions: [String::from("lorem"), String::from("bibliography")]
+				.into_iter()
+				.collect(),
 		}
 	}
 }
@@ -221,6 +237,7 @@ impl LanguageToolOptions {
 		self.dictionary.extend(other.dictionary);
 		self.disabled_checks.extend(other.disabled_checks);
 		self.languages.extend(other.languages);
+		self.ignore_functions.extend(other.ignore_functions);
 
 		Self {
 			root: other.root.or(self.root),
@@ -235,6 +252,7 @@ impl LanguageToolOptions {
 			languages: self.languages,
 			dictionary: self.dictionary,
 			disabled_checks: self.disabled_checks,
+			ignore_functions: self.ignore_functions,
 		}
 	}
 }

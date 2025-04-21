@@ -113,9 +113,7 @@ async fn main() -> anyhow::Result<()> {
 			main: cli_args.main,
 			chunk_size: cli_args.chunk_size,
 			backend,
-			languages: HashMap::new(),
-			dictionary: HashMap::new(),
-			disabled_checks: HashMap::new(),
+			..LanguageToolOptions::default()
 		},
 	};
 
@@ -225,7 +223,7 @@ async fn handle_file(
 			lt.check_text(lang.clone(), &text).await?
 		};
 
-		collector.add(&world, &suggestions, &mapping);
+		collector.add(&world, &suggestions, &mapping, &args.lt.ignore_functions);
 		next_cache.insert(text, lang, suggestions);
 	}
 	*cache = next_cache;

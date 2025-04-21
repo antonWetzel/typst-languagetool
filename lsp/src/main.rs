@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs::File;
 use std::path::{Path, PathBuf};
 
@@ -90,6 +90,7 @@ struct Options {
 	on_change: Option<std::time::Duration>,
 	language_codes: HashMap<String, String>,
 	main: Option<PathBuf>,
+	ignore_functions: HashSet<String>,
 }
 
 struct State {
@@ -149,6 +150,7 @@ impl State {
 				chunk_size: options.lt.chunk_size,
 				language_codes: options.lt.languages,
 				main: options.lt.main,
+				ignore_functions: options.lt.ignore_functions,
 			},
 		})
 	}
@@ -413,6 +415,7 @@ impl State {
 			chunk_size: options.lt.chunk_size,
 			language_codes: options.lt.languages,
 			main: options.lt.main,
+			ignore_functions: options.lt.ignore_functions,
 		};
 
 		Ok(())
@@ -457,7 +460,12 @@ impl State {
 				eprintln!("Checking {}/{}", idx + 1, l);
 				self.lt.check_text(lang.clone(), &text).await?
 			};
-			collector.add(&world, &suggestions, &mapping);
+			collector.add(
+				&world,
+				&suggestions,
+				&mapping,
+				&self.options.ignore_functions,
+			);
 			next_cache.insert(text, lang, suggestions);
 		}
 		self.cache = next_cache;
