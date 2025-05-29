@@ -216,7 +216,10 @@ async fn handle_file(
 	let mut collector = typst_languagetool::FileCollector::new(file_id_opt, &world);
 	let mut next_cache = Cache::new();
 	for (text, mapping) in paragraphs {
-		let lang = mapping.long_language();
+		let lang = match args.lt.languages.get(mapping.short_language()) {
+			Some(lang) => lang.clone(),
+			None => mapping.long_language(),
+		};
 		let suggestions = if let Some(suggestions) = cache.get(&text, &lang) {
 			suggestions
 		} else {
