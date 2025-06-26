@@ -225,8 +225,9 @@ impl Default for LanguageToolOptions {
 			languages: HashMap::new(),
 			dictionary: HashMap::new(),
 			disabled_checks: HashMap::new(),
-			ignore_functions: [String::from("lorem"), String::from("bibliography")]
+			ignore_functions: ["lorem", "bibliography", "cite"]
 				.into_iter()
+				.map(String::from)
 				.collect(),
 		}
 	}

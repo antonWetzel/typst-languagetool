@@ -60,6 +60,7 @@ impl Mapping {
 				},
 				SyntaxKind::FuncCall
 					if ignore_functions.contains(node.leftmost_leaf().unwrap().text().as_str()) => {},
+				SyntaxKind::Ref if ignore_functions.contains("cite") => {},
 				_ => {
 					let range = node.range();
 					match locations.last_mut() {

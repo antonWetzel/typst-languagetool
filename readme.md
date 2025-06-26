@@ -80,7 +80,7 @@ dictionary: HashMap<String, Vec<String>>,
 disabled_checks: HashMap<String, Vec<String>>,
 /// preferred language codes
 languages: HashMap<String, String>,
-/// Functions calls to ignore (lorem, bibliography, ...)
+/// Functions calls to ignore (lorem, bibliography, cite, ...)
 ignore_functions: HashSet<String>,
 
 /// use bundled languagetool
