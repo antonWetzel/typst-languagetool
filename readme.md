@@ -27,7 +27,7 @@ Spellcheck typst files with LanguageTool.
 - typst-languagetool starts a LanguageTool instance with JNI
 - requires JAR with languagetool
 - add feature  `jar`
-- specify flag `jar_location=<path>` for cli or `"backend: "jar"` and `"jar-location": <path>` for LSP
+- specify flag `jar_location=<path>` for cli or `"backend: "jar"` and `"jar_location": <path>` for LSP
 
 ### Server
 
