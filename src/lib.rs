@@ -244,9 +244,10 @@ impl LanguageToolOptions {
 			root: other.root.or(self.root),
 			main: other.main.or(self.main),
 
-			chunk_size: (other.chunk_size != DEFAULT_CHUNK_SIZE)
-				.then_some(other.chunk_size)
-				.unwrap_or(self.chunk_size),
+			chunk_size: match other.chunk_size {
+				DEFAULT_CHUNK_SIZE => self.chunk_size,
+				_ => other.chunk_size,
+			},
 
 			backend: other.backend.or(self.backend),
 

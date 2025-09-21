@@ -1,6 +1,6 @@
 use std::{io::Write, io::stdout, ops::Not, path::Path};
 
-use annotate_snippets::{Level, Renderer, Snippet};
+use annotate_snippets::{AnnotationKind, Level, Renderer, Snippet};
 use typst::syntax::Source;
 use typst_languagetool::Diagnostic;
 
@@ -55,13 +55,17 @@ pub fn pretty(file: &Path, source: &Source, diagnostic: Diagnostic) {
 
 	let mut snippet = Snippet::source(&text[context.clone()])
 		.line_start(start_line + 1)
-		.origin(&file_name)
+		.path(&file_name)
 		.fold(true);
 
 	let start = diagnostic.locations[0].1.start - context.start;
 	let end = diagnostic.locations[0].1.end - context.start;
 
-	snippet = snippet.annotation(Level::Info.span(start..end).label(&diagnostic.message));
+	snippet = snippet.annotation(
+		AnnotationKind::Primary
+			.span(start..end)
+			.label(&diagnostic.message),
+	);
 
 	for replacement in diagnostic
 		.replacements
@@ -69,15 +73,15 @@ pub fn pretty(file: &Path, source: &Source, diagnostic: Diagnostic) {
 		.filter(|replacement| replacement.trim().is_empty().not())
 		.take(MAX_SUGGESTIONS)
 	{
-		snippet = snippet.annotation(Level::Help.span(start..end).label(&replacement));
+		snippet = snippet.annotation(AnnotationKind::Context.span(start..end).label(replacement));
 	}
-	let message = Level::Info
-		.title(&diagnostic.rule_description)
+	let message = Level::INFO
+		.primary_title(&diagnostic.rule_description)
 		.id(&diagnostic.rule_id)
-		.snippet(snippet);
+		.element(snippet);
 
 	let renderer = Renderer::styled();
-	println!("{}", renderer.render(message));
+	println!("{}", renderer.render(&[message]));
 }
 
 fn byte_to_position(source: &Source, index: usize) -> (usize, usize) {

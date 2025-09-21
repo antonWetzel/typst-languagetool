@@ -1,6 +1,9 @@
 use std::collections::{HashMap, HashSet};
 
-use languagetool_rust::{check::Match, CheckRequest, ServerClient};
+use languagetool_rust::api::{
+	check::{Match, Request},
+	server::ServerClient,
+};
 
 use crate::{LanguageToolBackend, Suggestion};
 
@@ -44,7 +47,7 @@ impl LanguageToolBackend for LanguageToolRemote {
 		let disabled_rules = self.disabled_categories.get(&lang).cloned();
 		let allowed = self.allowed_words.get(&lang);
 
-		let mut req = CheckRequest::default()
+		let mut req = Request::default()
 			.with_text(String::from(text))
 			.with_language(lang);
 		req.disabled_rules = disabled_rules;
@@ -53,10 +56,10 @@ impl LanguageToolBackend for LanguageToolRemote {
 
 		let mut suggestions = Vec::with_capacity(response.matches.len());
 		for m in response.matches {
-			if let Some(allowed) = allowed {
-				if filter_match(&m, allowed) {
-					continue;
-				}
+			if let Some(allowed) = allowed
+				&& filter_match(&m, allowed)
+			{
+				continue;
 			}
 			let suggestion = Suggestion {
 				start: m.offset,

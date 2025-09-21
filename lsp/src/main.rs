@@ -104,7 +104,7 @@ struct State {
 
 struct CheckData {
 	check_time: std::time::Instant,
-	url: Url,
+	url: Uri,
 	path: PathBuf,
 }
 
@@ -301,7 +301,7 @@ impl State {
 	}
 
 	async fn file_save(&mut self, params: DidSaveTextDocumentParams) -> anyhow::Result<()> {
-		let path = params.text_document.uri.to_file_path().unwrap();
+		let path = uri_path(&params.text_document.uri);
 		eprintln!("Save {}", path.display());
 		self.check = Some(CheckData {
 			check_time: std::time::Instant::now(),
@@ -312,7 +312,7 @@ impl State {
 	}
 
 	async fn file_open(&mut self, params: DidOpenTextDocumentParams) -> anyhow::Result<()> {
-		let path = params.text_document.uri.to_file_path().unwrap();
+		let path = uri_path(&params.text_document.uri);
 		eprintln!("Open {}", path.display());
 		self.world.use_shadow_file(&path, params.text_document.text);
 		self.check = Some(CheckData {
@@ -324,14 +324,14 @@ impl State {
 	}
 
 	async fn file_close(&mut self, params: DidCloseTextDocumentParams) -> anyhow::Result<()> {
-		let path = &params.text_document.uri.to_file_path().unwrap();
+		let path = uri_path(&params.text_document.uri);
 		eprintln!("Close {}", path.display());
 		self.world.use_original_file(&path);
 		Ok(())
 	}
 
 	async fn file_change(&mut self, params: DidChangeTextDocumentParams) -> anyhow::Result<()> {
-		let path = params.text_document.uri.to_file_path().unwrap();
+		let path = uri_path(&params.text_document.uri);
 		eprintln!("Change {}", path.display());
 		let source = self.world.shadow_file(&path).unwrap();
 
@@ -360,7 +360,7 @@ impl State {
 		Ok(())
 	}
 
-	async fn check_change(&mut self, path: &Path, url: Url) -> anyhow::Result<()> {
+	async fn check_change(&mut self, path: &Path, url: Uri) -> anyhow::Result<()> {
 		eprintln!("Checking: {}", path.display());
 
 		let diagnostics = match self.get_diagnostics(path).await {
@@ -580,4 +580,12 @@ fn byte_to_position(source: &Source, index: usize) -> (usize, usize) {
 	let head = source.get(start..index).unwrap();
 	let column = head.chars().count();
 	(line, column)
+}
+
+fn uri_path(uri: &Uri) -> PathBuf {
+	let path = &uri.path().as_str()[1..]; // skip remaining '/'
+	let path = percent_encoding::percent_decode_str(path)
+		.decode_utf8()
+		.unwrap();
+	PathBuf::from(path.as_ref())
 }

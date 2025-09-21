@@ -30,3 +30,4 @@ lsp-server.workspace = true
 lsp-types.workspace = true
 crossbeam-channel.workspace = true
 humantime-serde.workspace = true
+percent-encoding.workspace = true

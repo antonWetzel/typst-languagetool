@@ -9,7 +9,7 @@
     <dependency>
       <groupId>org.languagetool</groupId>		
       <artifactId>language-all</artifactId>
-      <version>6.4</version>
+      <version>6.6</version>
     </dependency>
   </dependencies>
 
