@@ -105,7 +105,7 @@ impl LtWorld {
 		Ok(path)
 	}
 
-	pub fn with_main(&self, main: PathBuf) -> LtWorldRunning {
+	pub fn with_main(&self, main: PathBuf) -> LtWorldRunning<'_> {
 		let main = VirtualPath::new(
 			main.canonicalize()
 				.unwrap()
