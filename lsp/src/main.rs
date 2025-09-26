@@ -583,7 +583,7 @@ fn byte_to_position(source: &Source, index: usize) -> (usize, usize) {
 }
 
 fn uri_path(uri: &Uri) -> PathBuf {
-	let path = &uri.path().as_str()[1..]; // skip remaining '/'
+	let path = &uri.path().as_str();
 	let path = percent_encoding::percent_decode_str(path)
 		.decode_utf8()
 		.unwrap();
