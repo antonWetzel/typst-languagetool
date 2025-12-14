@@ -6,7 +6,7 @@ use std::{
 
 use chrono::{DateTime, Datelike, FixedOffset, Local, Utc};
 use typst::{
-	Library, World,
+	Library, LibraryExt, World,
 	diag::{FileError, FileResult, SourceResult},
 	foundations::{Dict, Value},
 	layout::PagedDocument,

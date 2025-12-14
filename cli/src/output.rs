@@ -9,8 +9,14 @@ const MAX_SUGGESTIONS: usize = 20;
 pub fn plain(file: &Path, source: &Source, diagnostic: Diagnostic) {
 	let mut out = stdout().lock();
 
-	let (start_line, start_column) = byte_to_position(source, diagnostic.locations[0].1.start);
-	let (end_line, end_column) = byte_to_position(source, diagnostic.locations[0].1.end);
+	let (start_line, start_column) = source
+		.lines()
+		.byte_to_line_column(diagnostic.locations[0].1.start)
+		.unwrap();
+	let (end_line, end_column) = source
+		.lines()
+		.byte_to_line_column(diagnostic.locations[0].1.end)
+		.unwrap();
 	write!(
 		out,
 		"{} {}:{}-{}:{} info {}",
@@ -42,14 +48,23 @@ pub fn plain(file: &Path, source: &Source, diagnostic: Diagnostic) {
 pub fn pretty(file: &Path, source: &Source, diagnostic: Diagnostic) {
 	let file_name = format!("{}", file.display());
 
-	let (start_line, _) = byte_to_position(source, diagnostic.locations[0].1.start);
-	let (end_line, _) = byte_to_position(source, diagnostic.locations[0].1.end);
+	let start_line = source
+		.lines()
+		.byte_to_line(diagnostic.locations[0].1.start)
+		.unwrap();
+	let end_line = source
+		.lines()
+		.byte_to_line(diagnostic.locations[0].1.end)
+		.unwrap();
 	let text = source.text();
 	let context = if start_line == end_line {
-		source.line_to_range(start_line).unwrap()
+		source.lines().line_to_range(start_line).unwrap()
 	} else {
-		let start = source.line_to_byte(start_line).unwrap();
-		let end = source.line_to_byte(end_line + 1).unwrap_or(text.len());
+		let start = source.lines().line_to_byte(start_line).unwrap();
+		let end = source
+			.lines()
+			.line_to_byte(end_line + 1)
+			.unwrap_or(text.len());
 		start..end
 	};
 
@@ -82,12 +97,4 @@ pub fn pretty(file: &Path, source: &Source, diagnostic: Diagnostic) {
 
 	let renderer = Renderer::styled();
 	println!("{}", renderer.render(&[message]));
-}
-
-fn byte_to_position(source: &Source, index: usize) -> (usize, usize) {
-	let line = source.byte_to_line(index).unwrap();
-	let start = source.line_to_byte(line).unwrap();
-	let head = source.get(start..index).unwrap();
-	let column = head.chars().count();
-	(line, column)
 }

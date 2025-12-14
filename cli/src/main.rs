@@ -262,7 +262,6 @@ async fn handle_file(
 			plain_end();
 		} else {
 			pretty_start();
-			println!("{}", "\n\nChecking Document\n".green().bold());
 			for diagnostic in diagnostics {
 				output::pretty(&path, &source, diagnostic);
 			}

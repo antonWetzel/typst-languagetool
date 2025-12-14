@@ -11,7 +11,6 @@ use lsp_types::*;
 use lt_world::LtWorld;
 use serde_json::Value;
 use typst::World;
-use typst::syntax::Source;
 use typst_languagetool::{LanguageTool, LanguageToolBackend, LanguageToolOptions, Suggestion};
 
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
@@ -338,9 +337,11 @@ impl State {
 		for change in &params.content_changes {
 			if let Some(range) = change.range {
 				let start = source
+					.lines()
 					.line_column_to_byte(range.start.line as usize, range.start.character as usize)
 					.unwrap();
 				let end = source
+					.lines()
 					.line_column_to_byte(range.end.line as usize, range.end.character as usize)
 					.unwrap();
 				source.edit(start..end, &change.text);
@@ -477,10 +478,14 @@ impl State {
 		let diagnostics = diagnostics
 			.into_iter()
 			.map(|diagnostic| {
-				let (start_line, start_column) =
-					byte_to_position(&source, diagnostic.locations[0].1.start);
-				let (end_line, end_column) =
-					byte_to_position(&source, diagnostic.locations[0].1.end);
+				let (start_line, start_column) = source
+					.lines()
+					.byte_to_line_column(diagnostic.locations[0].1.start)
+					.unwrap();
+				let (end_line, end_column) = source
+					.lines()
+					.byte_to_line_column(diagnostic.locations[0].1.end)
+					.unwrap();
 
 				Diagnostic {
 					range: Range {
@@ -572,14 +577,6 @@ impl Cache {
 	pub fn insert(&mut self, text: String, lang: String, suggestions: Vec<Suggestion>) {
 		self.cache.insert(text, (lang, suggestions));
 	}
-}
-
-fn byte_to_position(source: &Source, index: usize) -> (usize, usize) {
-	let line = source.byte_to_line(index).unwrap();
-	let start = source.line_to_byte(line).unwrap();
-	let head = source.get(start..index).unwrap();
-	let column = head.chars().count();
-	(line, column)
 }
 
 fn uri_path(uri: &Uri) -> PathBuf {
