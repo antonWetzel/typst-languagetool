@@ -12,6 +12,9 @@ jni = { workspace = true, optional = true }
 anyhow.workspace = true
 languagetool-rust = { workspace = true, optional = true }
 
+[dev-dependencies]
+lt-world.workspace = true
+
 [workspace]
 members = [".", "cli", "lsp", "lt-world"]
 
