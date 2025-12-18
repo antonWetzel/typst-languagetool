@@ -229,16 +229,17 @@ impl Converter {
 				self.text += t.text.as_str();
 
 				let mut iter = t.text.encode_utf16();
-				let mut prev_text = "";
+				let mut prev_range = 0..0;
 				for g in t.glyphs.iter().cloned() {
+					let range = g.range();
+					// some chars (large brackets, ...) create mutliple glyphs, skip
+					if range == prev_range {
+						continue;
+					}
+					prev_range = range;
 					let Some(text) = t.text.get(g.range()) else {
 						continue;
 					};
-					// some chars (large brackets, ...) create mutliple glyphs, skip
-					if text == prev_text {
-						continue;
-					}
-					prev_text = text;
 
 					for t in text.encode_utf16() {
 						assert_eq!(t, iter.next().unwrap());
