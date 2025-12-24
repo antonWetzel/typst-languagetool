@@ -147,9 +147,14 @@ impl Converter {
 		}
 	}
 
-	fn insert_space(&mut self) {
-		self.text += " ";
-		self.mapping.chars.push((Span::detached(), 0..0));
+	fn insert_whitespace(&mut self, whitespace: &str) {
+		if self.text.ends_with(whitespace) {
+			return;
+		}
+		self.text += whitespace;
+		for _ in whitespace.encode_utf16() {
+			self.mapping.chars.push((Span::detached(), 0..0));
+		}
 	}
 
 	fn seperate(&mut self, res: &mut Vec<(String, Mapping)>) {
@@ -173,9 +178,7 @@ impl Converter {
 			self.seperate(res);
 			return;
 		}
-		self.text += "\n\n";
-		self.mapping.chars.push((Span::detached(), 0..0));
-		self.mapping.chars.push((Span::detached(), 0..0));
+		self.insert_whitespace("\n\n");
 	}
 
 	fn whitespace(&mut self, text: &TextItem, pos: Point, res: &mut Vec<(String, Mapping)>) {
@@ -192,7 +195,7 @@ impl Converter {
 		if span == self.span {
 			return;
 		}
-		self.insert_space();
+		self.insert_whitespace(" ");
 	}
 
 	fn frame(
