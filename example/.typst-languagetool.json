@@ -10,5 +10,9 @@
             "Sprache"
         ]
     },
+    "languages": {
+        "de": "de-DE",
+        "en": "en-GB"
+    },
     "disabled_checks": {}
 }

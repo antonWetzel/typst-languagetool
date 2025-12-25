@@ -51,7 +51,8 @@ impl Mapping {
 					let range = (start + range.start as usize)..(start + range.end as usize);
 					match locations.last_mut() {
 						Some((last_id, last_range))
-							if *last_id == id && last_range.end == range.start =>
+							if *last_id == id
+								&& (last_range.start..=last_range.end).contains(&range.start) =>
 						{
 							last_range.end = range.end
 						},
@@ -182,11 +183,14 @@ impl Converter {
 	}
 
 	fn whitespace(&mut self, text: &TextItem, pos: Point, res: &mut Vec<(String, Mapping)>) {
-		if self.x.approx_eq(pos.x) {
+		// Use a large allowed delta for comparisions
+		let delta = Abs::pt(1.0);
+
+		if (self.x - pos.x).abs() < delta {
 			return;
 		}
 		let line_spacing = (text.font.metrics().cap_height + LINE_SPACING).at(text.size);
-		let next_line = (self.y + line_spacing).approx_eq(pos.y);
+		let next_line = (self.y + line_spacing - pos.y).abs() < Abs::pt(1.0);
 		if !next_line {
 			self.insert_parbreak(res);
 			return;
