@@ -1,11 +1,11 @@
 use std::{
-	collections::{hash_map::Entry, HashMap},
+	collections::{HashMap, hash_map::Entry},
 	ops::Not,
 };
 
 use jni::{
-	objects::{GlobalRef, JObject, JValue},
 	InitArgsBuilder, JNIEnv, JavaVM,
+	objects::{GlobalRef, JObject, JValue},
 };
 
 use crate::{LanguageToolBackend, Suggestion};
