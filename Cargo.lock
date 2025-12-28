@@ -3711,6 +3711,7 @@ dependencies = [
  "anyhow",
  "jni",
  "languagetool-rust",
+ "lt-world",
  "serde",
  "typst",
 ]

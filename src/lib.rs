@@ -15,9 +15,6 @@ use typst::{
 	syntax::{FileId, Source},
 };
 
-#[cfg(not(any(feature = "bundle", feature = "jar", feature = "server",)))]
-compile_error!("No backends enabled, the backends can be enabled with feature flags");
-
 #[allow(async_fn_in_trait)]
 pub trait LanguageToolBackend {
 	async fn allow_words(&mut self, lang: String, words: &[String]) -> anyhow::Result<()>;
@@ -31,8 +28,11 @@ pub enum LanguageTool {
 	JNI(jni::LanguageToolJNI),
 	#[cfg(feature = "server")]
 	Remote(remote::LanguageToolRemote),
+	#[cfg(test)]
+	_TestOnly(std::convert::Infallible),
 }
 
+#[cfg(any(feature = "bundle", feature = "jar", feature = "server"))]
 impl LanguageTool {
 	pub async fn new(options: &LanguageToolOptions) -> anyhow::Result<Self> {
 		let mut lt = match &options.backend {
@@ -77,6 +77,7 @@ impl LanguageTool {
 	}
 }
 
+#[cfg(any(feature = "bundle", feature = "jar", feature = "server"))]
 impl LanguageToolBackend for LanguageTool {
 	async fn allow_words(&mut self, lang: String, words: &[String]) -> anyhow::Result<()> {
 		match self {

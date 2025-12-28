@@ -20,6 +20,9 @@ use std::{
 	time::Duration,
 };
 
+#[cfg(not(any(feature = "bundle", feature = "jar", feature = "server")))]
+compile_error!("No backends enabled, the backends can be enabled with feature flags");
+
 #[derive(ValueEnum, Clone, Debug)]
 enum Task {
 	Check,
