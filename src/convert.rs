@@ -9,6 +9,31 @@ use typst::{
 
 use crate::Suggestion;
 
+fn is_call_to_ignored_function(
+	node: &typst::syntax::LinkedNode,
+	ignore_functions: &HashSet<String>,
+) -> bool {
+	match node.kind() {
+		SyntaxKind::FuncCall => node
+			.leftmost_leaf()
+			.map(|leaf| ignore_functions.contains(leaf.text().as_str()))
+			.unwrap_or(false),
+		SyntaxKind::Ref => ignore_functions.contains("cite"),
+		_ => false,
+	}
+}
+
+fn should_ignore(node: &typst::syntax::LinkedNode, ignore_functions: &HashSet<String>) -> bool {
+	let mut current = Some(node);
+	while let Some(node) = current {
+		if is_call_to_ignored_function(node, ignore_functions) {
+			return true;
+		}
+		current = node.parent();
+	}
+	false
+}
+
 #[derive(Debug)]
 pub struct Mapping {
 	chars: Vec<(Span, Range<u16>)>,
@@ -45,6 +70,10 @@ impl Mapping {
 				continue;
 			};
 
+			if should_ignore(&node, ignore_functions) {
+				continue;
+			}
+
 			match node.kind() {
 				SyntaxKind::Text => {
 					let start = node.range().start;
@@ -59,9 +88,6 @@ impl Mapping {
 						_ => locations.push((id, range)),
 					}
 				},
-				SyntaxKind::FuncCall
-					if ignore_functions.contains(node.leftmost_leaf().unwrap().text().as_str()) => {},
-				SyntaxKind::Ref if ignore_functions.contains("cite") => {},
 				_ => {
 					let range = node.range();
 					match locations.last_mut() {
@@ -264,5 +290,100 @@ impl Converter {
 			},
 			I::Link(..) | I::Tag(..) | I::Shape(..) | I::Image(..) => {},
 		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+	use crate::Suggestion;
+	use std::path::Path;
+
+	struct TestHarness<'a> {
+		world: lt_world::LtWorldRunning<'a>,
+		text: String,
+		mapping: Mapping,
+	}
+
+	impl<'a> TestHarness<'a> {
+		fn new(world: &'a lt_world::LtWorld, main_file: &Path) -> Self {
+			let world = world.with_main(main_file.to_path_buf());
+			let doc = world.compile().unwrap();
+			let paragraphs = document(&doc, 1000, None);
+			assert_eq!(paragraphs.len(), 1, "expected exactly one paragraph");
+			let (text, mapping) = paragraphs.into_iter().next().unwrap();
+			Self { world, text, mapping }
+		}
+
+		fn suggestion_for(&self, needle: &str) -> Suggestion {
+			let start = self
+				.text
+				.find(needle)
+				.unwrap_or_else(|| panic!("expected '{}' in text: {:?}", needle, self.text));
+			Suggestion {
+				start,
+				end: start + needle.len(),
+				message: "test".into(),
+				replacements: vec![],
+				rule_description: "test".into(),
+				rule_id: "test".into(),
+			}
+		}
+
+		fn locations_with_ignore(
+			&self,
+			suggestion: &Suggestion,
+			ignore_functions: &[&str],
+		) -> Vec<(typst::syntax::FileId, std::ops::Range<usize>)> {
+			let ignore_set: HashSet<String> =
+				ignore_functions.iter().map(|s| s.to_string()).collect();
+			self.mapping
+				.location(suggestion, &self.world, None, &ignore_set)
+		}
+
+		fn is_ignored(&self, needle: &str, ignore_functions: &[&str]) -> bool {
+			let suggestion = self.suggestion_for(needle);
+			self.locations_with_ignore(&suggestion, ignore_functions)
+				.is_empty()
+		}
+	}
+
+	#[test]
+	fn test_ignore_functions_filters_ancestors() {
+		let world = lt_world::LtWorld::new("example".into());
+		let harness = TestHarness::new(&world, Path::new("example/ignore.typ"));
+
+		assert!(
+			harness.is_ignored("𝜆", &["ignorespelling"]),
+			"lambda should be ignored when ignorespelling is in ignore_functions"
+		);
+		assert!(
+			!harness.is_ignored("𝜆", &[]),
+			"lambda should not be ignored when ignorespelling is not in ignore_functions"
+		);
+	}
+
+	#[test]
+	fn test_ignore_functions_content_block_syntax() {
+		let world = lt_world::LtWorld::new("example".into());
+		let harness = TestHarness::new(&world, Path::new("example/content_block.typ"));
+
+		assert!(
+			harness.is_ignored("mistaek", &["prog"]),
+			"content in #prog[] should be ignored when prog is in ignore_functions"
+		);
+		assert!(
+			!harness.is_ignored("mistaek", &[]),
+			"content in #prog[] should not be ignored when prog is not in ignore_functions"
+		);
+
+		assert!(
+			harness.is_ignored("anohter", &["prog"]),
+			"content in #prog([]) should be ignored when prog is in ignore_functions"
+		);
+		assert!(
+			!harness.is_ignored("anohter", &[]),
+			"content in #prog([]) should not be ignored when prog is not in ignore_functions"
+		);
 	}
 }

@@ -13,6 +13,9 @@ use serde_json::Value;
 use typst::World;
 use typst_languagetool::{LanguageTool, LanguageToolBackend, LanguageToolOptions, Suggestion};
 
+#[cfg(not(any(feature = "bundle", feature = "jar", feature = "server")))]
+compile_error!("No backends enabled, the backends can be enabled with feature flags");
+
 #[derive(serde::Serialize, serde::Deserialize, Debug, Clone, Default)]
 #[serde(default)]
 struct InitOptions {
