@@ -59,18 +59,22 @@ struct CliArgs {
 	plain: bool,
 
 	/// Use bundled languagetool jar.
+	#[cfg(feature = "bundle")]
 	#[clap(long, default_value_t = false)]
 	bundle: bool,
 
 	/// Custom location for the languagetool jar.
+	#[cfg(feature = "jar")]
 	#[clap(long, default_value = None)]
 	jar_location: Option<String>,
 
 	/// Host for remote languagetool server.
+	#[cfg(feature = "server")]
 	#[clap(long, default_value = None)]
-	host: Option<String>,
+	hostname: Option<String>,
 
 	/// Port for remote languagetool server.
+	#[cfg(feature = "server")]
 	#[clap(long, default_value = None)]
 	port: Option<String>,
 
@@ -87,23 +91,48 @@ struct Args {
 	lt: LanguageToolOptions,
 }
 
+macro_rules! cfg_if {
+	($cfg:meta; $if_expr:expr; $else_expr:expr) => {{
+		let value;
+		#[cfg($cfg)]
+		{
+			value = $if_expr;
+		}
+		#[cfg(not($cfg))]
+		{
+			value = $else_expr;
+		}
+		value
+	}};
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
 	let cli_args = CliArgs::parse();
 
-	let backend = match (
-		cli_args.bundle,
-		cli_args.jar_location,
-		cli_args.host,
-		cli_args.port,
-	) {
-		(false, None, None, None) => None,
-		(true, None, None, None) => Some(BackendOptions::Bundle),
-		(false, Some(path), None, None) => Some(BackendOptions::Jar { jar_location: path }),
-		(false, None, Some(host), Some(port)) => Some(BackendOptions::Remote { host, port }),
-		_ => Err(anyhow::anyhow!(
+	let backend = {
+		let bundle = cfg_if!(feature = "bundle"; if cli_args.bundle { Some(BackendOptions::Bundle) } else { None }; None);
+		let jar = cfg_if!(feature = "jar"; cli_args.jar_location.map(|path| BackendOptions::Jar {jar_location: path}); None);
+		let remote = cfg_if!(feature = "server"; if let Some(hostname) = cli_args.hostname {
+            let options = BackendOptions::Remote {
+                host: hostname,
+                port: cli_args.port.unwrap_or("".to_string())
+            };
+            Some(options)
+        } else {
+            anyhow::ensure!(cli_args.port.is_none(), "Can only specify port if hostname is specified.");
+            None
+        }; None);
+		let backends = [bundle, jar, remote];
+		let mut enabled_backends = backends
+			.into_iter()
+			.filter_map(|backend| backend)
+			.collect::<Vec<_>>();
+		anyhow::ensure!(
+			enabled_backends.len() == 1,
 			"Exactly one of 'bundled', 'jar_location' or 'host and port' must be specified."
-		))?,
+		);
+		enabled_backends.pop().unwrap()
 	};
 
 	let mut args = Args {
@@ -115,7 +144,7 @@ async fn main() -> anyhow::Result<()> {
 			root: cli_args.root,
 			main: cli_args.main,
 			chunk_size: cli_args.chunk_size,
-			backend,
+			backend: Some(backend),
 			..LanguageToolOptions::default()
 		},
 	};
