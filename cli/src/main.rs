@@ -37,7 +37,7 @@ struct CliArgs {
 	#[clap(short, long, default_value = None)]
 	path: Option<PathBuf>,
 
-	/// Main file for the document. Defaults to `path`.
+	/// Root directory for the document. Defaults to `path`.
 	#[clap(short, long, default_value = None)]
 	root: Option<PathBuf>,
 
