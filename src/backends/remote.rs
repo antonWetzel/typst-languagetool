@@ -12,15 +12,24 @@ pub struct LanguageToolRemote {
 	server_client: ServerClient,
 	disabled_categories: HashMap<String, Vec<String>>,
 	allowed_words: HashMap<String, HashSet<String>>,
+	username: Option<String>,
+	api_key: Option<String>,
 }
 
 impl LanguageToolRemote {
-	pub fn new(hostname: &str, port: &str) -> anyhow::Result<Self> {
+	pub fn new(
+		hostname: &str,
+		port: &str,
+		username: Option<String>,
+		api_key: Option<String>,
+	) -> anyhow::Result<Self> {
 		let server_client = ServerClient::new(hostname, port);
 		Ok(Self {
 			server_client,
 			disabled_categories: HashMap::new(),
 			allowed_words: HashMap::new(),
+			username,
+			api_key,
 		})
 	}
 }
@@ -51,6 +60,8 @@ impl LanguageToolBackend for LanguageToolRemote {
 			.with_text(String::from(text))
 			.with_language(lang);
 		req.disabled_rules = disabled_rules;
+		req.username = self.username.clone();
+		req.api_key = self.api_key.clone();
 
 		let response = self.server_client.check(&req).await?;
 
