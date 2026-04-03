@@ -56,14 +56,17 @@ impl LanguageTool {
 			},
 
 			#[cfg(feature = "server")]
-			Some(BackendOptions::Remote { host, port, username, api_key }) => {
-				Self::Remote(remote::LanguageToolRemote::new(host, port, username.clone(), api_key.clone())?)
-			},
+			Some(BackendOptions::Remote { host, port, username, api_key }) => Self::Remote(
+				remote::LanguageToolRemote::new(host, port, username.clone(), api_key.clone())?,
+			),
 
 			#[cfg(not(feature = "server"))]
-			Some(BackendOptions::Remote { host: _, port: _, username: _, api_key: _ }) => {
-				Err(anyhow::anyhow!("Feature 'server' is disabled."))?
-			},
+			Some(BackendOptions::Remote {
+				host: _,
+				port: _,
+				username: _,
+				api_key: _,
+			}) => Err(anyhow::anyhow!("Feature 'server' is disabled."))?,
 		};
 
 		for (lang, dict) in &options.dictionary {

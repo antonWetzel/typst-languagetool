@@ -417,7 +417,7 @@ checksum = "b94f61472cee1439c0b966b47e3aca9ae07e45d070759512cd390ea2bebc6675"
 
 [[package]]
 name = "cli"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "annotate-snippets 0.12.4",
  "anyhow",
@@ -1951,7 +1951,7 @@ checksum = "34080505efa8e45a4b816c349525ebe327ceaa8559756f0356cba97ef3bf7432"
 
 [[package]]
 name = "lsp"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "crossbeam-channel",
@@ -1996,7 +1996,7 @@ dependencies = [
 
 [[package]]
 name = "lt-world"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "chrono",
  "dirs",
@@ -3706,7 +3706,7 @@ dependencies = [
 
 [[package]]
 name = "typst-languagetool"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "jni",
