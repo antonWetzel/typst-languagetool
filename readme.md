@@ -33,7 +33,20 @@ Spellcheck typst files with LanguageTool.
 
 - typst-languagetool connects to a running LanguageTool server
 - add feature `server`
-- specify flags `host=<host>` and `port=<port>` for cli or `"backend: "server"`, `"host: <host>` and `"port": <port>` for LSP
+- specify flags `host=<host>` and `port=<port>` for cli or `"backend": "server"`, `"host": <host>` and `"port": <port>` for LSP
+- public API endpoint: `https://api.languagetool.org`
+- premium API endpoint: `https://api.languagetoolplus.com`
+- premium API also requires `username` and `api_key`
+
+```json
+{
+  "backend": "server",
+  "host": "https://api.languagetoolplus.com",
+  "port": 443,
+  "username": "user@example.com",
+  "api_key": "secret"
+}
+```
 
 ## Usage
 
@@ -91,6 +104,10 @@ jar_location: Option<String>,
 host: Option<String>,
 /// port for server backend
 port: Option<String>,
+/// username for LanguageTool Premium API
+username: Option<String>,
+/// API key for LanguageTool Premium API
+api_key: Option<String>,
 
 /// Size for a text chunk to send to LanguageTool
 chunk_size: usize,

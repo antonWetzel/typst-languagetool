@@ -74,6 +74,14 @@ struct CliArgs {
 	#[clap(long, default_value = None)]
 	port: Option<String>,
 
+	/// Username for LanguageTool Premium API.
+	#[clap(long, default_value = None)]
+	username: Option<String>,
+
+	/// API key for LanguageTool Premium API.
+	#[clap(long, default_value = None)]
+	api_key: Option<String>,
+
 	/// Path to JSON with configuration.
 	#[clap(long, default_value = None)]
 	options: Option<PathBuf>,
@@ -96,11 +104,15 @@ async fn main() -> anyhow::Result<()> {
 		cli_args.jar_location,
 		cli_args.host,
 		cli_args.port,
+		cli_args.username,
+		cli_args.api_key,
 	) {
-		(false, None, None, None) => None,
-		(true, None, None, None) => Some(BackendOptions::Bundle),
-		(false, Some(path), None, None) => Some(BackendOptions::Jar { jar_location: path }),
-		(false, None, Some(host), Some(port)) => Some(BackendOptions::Remote { host, port }),
+		(false, None, None, None, _, _) => None,
+		(true, None, None, None, _, _) => Some(BackendOptions::Bundle),
+		(false, Some(path), None, None, _, _) => Some(BackendOptions::Jar { jar_location: path }),
+		(false, None, Some(host), Some(port), username, api_key) => {
+			Some(BackendOptions::Remote { host, port, username, api_key })
+		},
 		_ => Err(anyhow::anyhow!(
 			"Exactly one of 'bundled', 'jar_location' or 'host and port' must be specified."
 		))?,

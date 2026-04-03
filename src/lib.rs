@@ -56,12 +56,12 @@ impl LanguageTool {
 			},
 
 			#[cfg(feature = "server")]
-			Some(BackendOptions::Remote { host, port }) => {
-				Self::Remote(remote::LanguageToolRemote::new(host, port)?)
+			Some(BackendOptions::Remote { host, port, username, api_key }) => {
+				Self::Remote(remote::LanguageToolRemote::new(host, port, username.clone(), api_key.clone())?)
 			},
 
 			#[cfg(not(feature = "server"))]
-			Some(BackendOptions::Remote { host: _, port: _ }) => {
+			Some(BackendOptions::Remote { host: _, port: _, username: _, api_key: _ }) => {
 				Err(anyhow::anyhow!("Feature 'server' is disabled."))?
 			},
 		};
@@ -211,6 +211,10 @@ pub enum BackendOptions {
 		host: String,
 		#[serde(deserialize_with = "string_or_number")]
 		port: String,
+		/// Username for LanguageTool Premium API
+		username: Option<String>,
+		/// API key for LanguageTool Premium API
+		api_key: Option<String>,
 	},
 }
 
