@@ -29,6 +29,9 @@ enum Task {
 	Watch,
 }
 
+/// Check a typst document with language tool.
+///
+/// If backends are not listed, the required build features are not enabled.
 #[derive(Parser, Debug)]
 struct CliArgs {
 	task: Task,
@@ -59,19 +62,23 @@ struct CliArgs {
 	plain: bool,
 
 	/// Use bundled languagetool jar.
-	#[clap(long, default_value_t = false)]
+	#[cfg_attr(not(feature = "bundle"), clap(skip))]
+	#[cfg_attr(feature = "bundle", clap(long, default_value_t = false))]
 	bundle: bool,
 
 	/// Custom location for the languagetool jar.
-	#[clap(long, default_value = None)]
+	#[cfg_attr(not(feature = "jar"), clap(skip))]
+	#[cfg_attr(feature = "jar", clap(long, default_value = None))]
 	jar_location: Option<String>,
 
 	/// Host for remote languagetool server.
-	#[clap(long, default_value = None)]
+	#[cfg_attr(not(feature = "server"), clap(skip))]
+	#[cfg_attr(feature = "server", clap(long, default_value = None))]
 	host: Option<String>,
 
 	/// Port for remote languagetool server.
-	#[clap(long, default_value = None)]
+	#[cfg_attr(not(feature = "server"), clap(skip))]
+	#[cfg_attr(feature = "server", clap(long, default_value = None))]
 	port: Option<String>,
 
 	/// Username for LanguageTool Premium API.
@@ -107,15 +114,26 @@ async fn main() -> anyhow::Result<()> {
 		cli_args.username,
 		cli_args.api_key,
 	) {
-		(false, None, None, None, _, _) => None,
-		(true, None, None, None, _, _) => Some(BackendOptions::Bundle),
-		(false, Some(path), None, None, _, _) => Some(BackendOptions::Jar { jar_location: path }),
+		(true, None, None, None, _, _) => BackendOptions::Bundle,
+		(false, Some(path), None, None, _, _) => BackendOptions::Jar { jar_location: path },
 		(false, None, Some(host), Some(port), username, api_key) => {
-			Some(BackendOptions::Remote { host, port, username, api_key })
+			BackendOptions::Remote { host, port, username, api_key }
 		},
-		_ => Err(anyhow::anyhow!(
-			"Exactly one of 'bundled', 'jar_location' or 'host and port' must be specified."
-		))?,
+
+		_ => {
+			let mut available = Vec::new();
+			#[cfg(feature = "bundle")]
+			available.push("bundle");
+			#[cfg(feature = "jar")]
+			available.push("jar-location");
+			#[cfg(feature = "server")]
+			available.push("host and port");
+			let available = available.join(" or ");
+
+			Err(anyhow::anyhow!(
+				"Exactly one backend must be specified ({available})"
+			))?
+		},
 	};
 
 	let mut args = Args {
@@ -127,7 +145,7 @@ async fn main() -> anyhow::Result<()> {
 			root: cli_args.root,
 			main: cli_args.main,
 			chunk_size: cli_args.chunk_size,
-			backend,
+			backend: Some(backend),
 			..LanguageToolOptions::default()
 		},
 	};
