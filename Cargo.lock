@@ -2001,6 +2001,7 @@ dependencies = [
  "chrono",
  "dirs",
  "typst",
+ "typst-eval",
  "typst-kit",
 ]
 

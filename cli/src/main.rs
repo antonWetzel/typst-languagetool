@@ -227,6 +227,9 @@ async fn handle_file(
 	include_all: bool,
 ) -> anyhow::Result<()> {
 	let world = world.with_main(args.lt.main.clone().unwrap_or(path.to_owned()));
+	world.compile_2().unwrap();
+	return Ok(());
+
 	let doc = match world.compile() {
 		Ok(doc) => doc,
 		Err(err) => {

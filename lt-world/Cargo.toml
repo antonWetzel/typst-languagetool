@@ -11,3 +11,4 @@ typst-kit.workspace = true
 
 chrono.workspace = true
 dirs.workspace = true
+typst-eval = "0.14.2"

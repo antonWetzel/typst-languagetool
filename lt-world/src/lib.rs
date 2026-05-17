@@ -1,17 +1,25 @@
 use std::{
 	collections::HashMap,
-	ops::Deref,
+	ops::{ControlFlow, Deref, Not},
 	path::{Path, PathBuf},
 };
 
 use chrono::{DateTime, Datelike, FixedOffset, Local, Utc};
 use typst::{
-	Library, LibraryExt, World,
+	Library, LibraryExt, ROUTINES, World,
+	comemo::Tracked,
 	diag::{FileError, FileResult, SourceResult},
-	foundations::{Dict, Value},
-	layout::PagedDocument,
+	engine::{Engine, Route, Sink, Traced},
+	foundations::{
+		Chainable, Content, Dict, Field, IntoValue, NativeElement, SequenceElem, Set, ShowSet,
+		StyleChain, StyledElem, Styles, Target, TargetElem, Value,
+	},
+	introspection::Introspector,
+	layout::{PagedDocument, resolve::Header},
+	math::EquationElem,
+	model::{FigureElem, HeadingElem, ParbreakElem, TableElem},
 	syntax::{FileId, Source, VirtualPath},
-	text::Font,
+	text::{Font, SpaceElem, TextElem},
 	utils::LazyHash,
 };
 use typst_kit::{
@@ -130,6 +138,95 @@ impl Deref for LtWorldRunning<'_> {
 impl LtWorldRunning<'_> {
 	pub fn compile(&self) -> SourceResult<PagedDocument> {
 		typst::compile(self).output
+	}
+
+	pub fn compile_2(&self) -> SourceResult<()> {
+		use typst::comemo::Track;
+
+		let mut sink = Sink::new();
+		let world = (self as &dyn World).track();
+
+		let main = world.main();
+		let main = world.source(main).expect("source exist");
+
+		let content = typst_eval::eval(
+			&ROUTINES,
+			world,
+			Traced::default().track(),
+			sink.track_mut(),
+			Route::default().track(),
+			&main,
+		)?
+		.content();
+
+		let mut collector = TestCollector { text: String::new() };
+		collector.iter_content(&content, StyleChain::default());
+		panic!("{}", collector.text);
+
+		Ok(())
+	}
+}
+
+struct TestCollector {
+	text: String,
+}
+
+impl TestCollector {
+	pub fn add_break(&mut self) {
+		self.text += "\n\n";
+	}
+
+	pub fn iter_content(&mut self, content: &Content, style: StyleChain) {
+		if let Some(styled) = content.to_packed::<StyledElem>() {
+			let style = style.chain(&styled.styles);
+			self.iter_content(&styled.child, style);
+		} else if let Some(text) = content.to_packed::<TextElem>() {
+			let lang = style.get(TextElem::lang);
+			let region = style.get(TextElem::region);
+			self.text += text.text.as_str();
+			// println!("{:?}+{:?}: {}", lang, region, text.text);
+		} else if let Some(heading) = content.to_packed::<HeadingElem>() {
+			let _level = heading.resolve_level(style);
+			// chunking based on this level
+			self.iter_content(&heading.body, style);
+		} else if let Some(sequence) = content.to_packed::<SequenceElem>() {
+			for child in sequence.children.iter() {
+				self.iter_content(child, style);
+			}
+		} else if let Some(_space) = content.to_packed::<SpaceElem>() {
+			// ?
+		} else if let Some(_parbreak) = content.to_packed::<ParbreakElem>() {
+			self.add_break();
+		} else if let Some(figure) = content.to_packed::<FigureElem>() {
+			if let Some(caption) = figure.caption.get_ref(style) {
+				self.iter_content(&caption.body, style);
+			}
+			self.iter_content(&figure.body, style);
+		} else if let Some(_equation) = content.to_packed::<EquationElem>() {
+			// ?
+		} else {
+			for (_key, field) in content.fields() {
+				self.iter_value(&field, style);
+			}
+			if self.text.ends_with("\n\n").not() {
+				self.add_break();
+			}
+		}
+	}
+
+	pub fn iter_value(&mut self, value: &Value, style: StyleChain) {
+		match value {
+			Value::Content(content) => {
+				self.iter_content(content, style);
+			},
+			Value::Array(array) => {
+				for value in array.iter() {
+					self.iter_value(value, style);
+				}
+			},
+			// symbol?
+			_ => {},
+		}
 	}
 }
 
