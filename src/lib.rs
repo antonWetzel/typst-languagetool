@@ -28,11 +28,11 @@ pub enum LanguageTool {
 	JNI(jni::LanguageToolJNI),
 	#[cfg(feature = "server")]
 	Remote(remote::LanguageToolRemote),
+	Harper(harper::HarperBackend),
 	#[cfg(test)]
 	_TestOnly(std::convert::Infallible),
 }
 
-#[cfg(any(feature = "bundle", feature = "jar", feature = "server"))]
 impl LanguageTool {
 	pub async fn new(options: &LanguageToolOptions) -> anyhow::Result<Self> {
 		let mut lt = match &options.backend {
@@ -67,6 +67,8 @@ impl LanguageTool {
 				username: _,
 				api_key: _,
 			}) => Err(anyhow::anyhow!("Feature 'server' is disabled."))?,
+
+			Some(BackendOptions::Harper {}) => Self::Harper(harper::HarperBackend {}),
 		};
 
 		for (lang, dict) in &options.dictionary {
@@ -80,7 +82,6 @@ impl LanguageTool {
 	}
 }
 
-#[cfg(any(feature = "bundle", feature = "jar", feature = "server"))]
 impl LanguageToolBackend for LanguageTool {
 	async fn allow_words(&mut self, lang: String, words: &[String]) -> anyhow::Result<()> {
 		match self {
@@ -88,6 +89,7 @@ impl LanguageToolBackend for LanguageTool {
 			Self::JNI(lt) => lt.allow_words(lang, words).await,
 			#[cfg(feature = "server")]
 			Self::Remote(lt) => lt.allow_words(lang, words).await,
+			Self::Harper(lt) => lt.allow_words(lang, words).await,
 
 			#[allow(unreachable_patterns)]
 			_ => unreachable!("{:?} {:?}", lang, words),
@@ -99,6 +101,7 @@ impl LanguageToolBackend for LanguageTool {
 			Self::JNI(lt) => lt.disable_checks(lang, checks).await,
 			#[cfg(feature = "server")]
 			Self::Remote(lt) => lt.disable_checks(lang, checks).await,
+			Self::Harper(lt) => lt.disable_checks(lang, checks).await,
 
 			#[allow(unreachable_patterns)]
 			_ => unreachable!("{:?} {:?}", lang, checks),
@@ -110,6 +113,7 @@ impl LanguageToolBackend for LanguageTool {
 			Self::JNI(lt) => lt.check_text(lang, text).await,
 			#[cfg(feature = "server")]
 			Self::Remote(lt) => lt.check_text(lang, text).await,
+			Self::Harper(lt) => lt.check_text(lang, text).await,
 
 			#[allow(unreachable_patterns)]
 			_ => unreachable!("{:?} {:?}", lang, text),
@@ -218,6 +222,10 @@ pub enum BackendOptions {
 		username: Option<String>,
 		/// API key for LanguageTool Premium API
 		api_key: Option<String>,
+	},
+	#[serde(rename = "harper")]
+	Harper {
+		// future todo: configuration and other harper specific data
 	},
 }
 

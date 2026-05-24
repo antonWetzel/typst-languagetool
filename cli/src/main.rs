@@ -20,9 +20,6 @@ use std::{
 	time::Duration,
 };
 
-#[cfg(not(any(feature = "bundle", feature = "jar", feature = "server")))]
-compile_error!("No backends enabled, the backends can be enabled with feature flags");
-
 #[derive(ValueEnum, Clone, Debug)]
 enum Task {
 	Check,
@@ -65,6 +62,10 @@ struct CliArgs {
 	#[cfg_attr(not(feature = "bundle"), clap(skip))]
 	#[cfg_attr(feature = "bundle", clap(long, default_value_t = false))]
 	bundle: bool,
+
+	/// Use harper.
+	#[clap(long, default_value_t = false)]
+	harper: bool,
 
 	/// Custom location for the languagetool jar.
 	#[cfg_attr(not(feature = "jar"), clap(skip))]
@@ -113,12 +114,14 @@ async fn main() -> anyhow::Result<()> {
 		cli_args.port,
 		cli_args.username,
 		cli_args.api_key,
+		cli_args.harper,
 	) {
-		(true, None, None, None, _, _) => BackendOptions::Bundle,
-		(false, Some(path), None, None, _, _) => BackendOptions::Jar { jar_location: path },
-		(false, None, Some(host), Some(port), username, api_key) => {
+		(true, None, None, None, _, _, false) => BackendOptions::Bundle,
+		(false, Some(path), None, None, _, _, false) => BackendOptions::Jar { jar_location: path },
+		(false, None, Some(host), Some(port), username, api_key, false) => {
 			BackendOptions::Remote { host, port, username, api_key }
 		},
+		(false, None, None, None, _, _, true) => BackendOptions::Harper {},
 
 		_ => {
 			let mut available = Vec::new();
@@ -128,6 +131,7 @@ async fn main() -> anyhow::Result<()> {
 			available.push("jar-location");
 			#[cfg(feature = "server")]
 			available.push("host and port");
+			available.push("harper");
 			let available = available.join(" or ");
 
 			Err(anyhow::anyhow!(
