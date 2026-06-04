@@ -245,7 +245,7 @@ async fn handle_file(
 	let file_id = world.file_id(path).unwrap();
 	let file_id_opt = include_all.not().then_some(file_id);
 
-	let paragraphs = typst_languagetool::convert::document(&doc, chunk_size, file_id_opt);
+	let paragraphs = typst_languagetool::convert::content(&doc, chunk_size, file_id_opt);
 	let mut collector = typst_languagetool::FileCollector::new(file_id_opt, &world);
 	let mut next_cache = Cache::new();
 	for (text, mapping) in paragraphs {

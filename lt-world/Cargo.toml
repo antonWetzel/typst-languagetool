@@ -8,7 +8,7 @@ edition.workspace = true
 [dependencies]
 typst.workspace = true
 typst-kit.workspace = true
+typst-eval.workspace = true
 
 chrono.workspace = true
 dirs.workspace = true
-typst-eval = "0.14.2"

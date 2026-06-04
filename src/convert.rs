@@ -120,7 +120,7 @@ impl Mapping {
 	}
 }
 
-pub fn document(
+pub fn content(
 	content: &Content,
 	chunk_size: usize,
 	file_id: Option<FileId>,
@@ -152,8 +152,11 @@ struct Converter {
 	prev: Vec<(String, Mapping)>,
 }
 
+// Text replacements
 const SPACE: &str = " ";
 const BREAK: &str = "\n\n";
+const EQUATION: &str = "0";
+const REFERENCE: &str = "X";
 
 impl Converter {
 	pub fn break_chunk(&mut self) {
@@ -215,7 +218,6 @@ impl Converter {
 			self.add_text(&text.text, text.span());
 		} else if let Some(heading) = content.to_packed::<HeadingElem>() {
 			let level = heading.resolve_level(style);
-			// todo: add setting for this
 			if level.get() <= 2 {
 				self.break_chunk();
 			}
@@ -238,11 +240,11 @@ impl Converter {
 			}
 			self.iter_content(&figure.body, style);
 		} else if let Some(equation) = content.to_packed::<EquationElem>() {
-			self.add_text("0", equation.span());
+			self.add_text(EQUATION, equation.span());
 		} else if let Some(cite) = content.to_packed::<RefElem>() {
-			self.add_text("X", cite.span());
+			self.add_text(REFERENCE, cite.span());
 		} else if let Some(cite) = content.to_packed::<CiteElem>() {
-			self.add_text("X", cite.span());
+			self.add_text(REFERENCE, cite.span());
 		} else {
 			for (_key, field) in content.fields() {
 				self.iter_value(&field, style);
@@ -261,7 +263,6 @@ impl Converter {
 					self.iter_value(value, style);
 				}
 			},
-			// symbol?
 			_ => {},
 		}
 	}
@@ -283,7 +284,7 @@ mod tests {
 		fn new(world: &'a lt_world::LtWorld, main_file: &Path) -> Self {
 			let world = world.with_main(main_file.to_path_buf());
 			let doc = world.compile().unwrap();
-			let paragraphs = document(&doc, 1000, None);
+			let paragraphs = content(&doc, 1000, None);
 			assert_eq!(paragraphs.len(), 1, "expected exactly one paragraph");
 			let (text, mapping) = paragraphs.into_iter().next().unwrap();
 			Self { world, text, mapping }

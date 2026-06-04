@@ -443,7 +443,7 @@ impl State {
 		};
 		eprintln!("Converting");
 		let paragraphs =
-			typst_languagetool::convert::document(&doc, self.options.chunk_size, Some(file_id));
+			typst_languagetool::convert::content(&doc, self.options.chunk_size, Some(file_id));
 		let mut collector = typst_languagetool::FileCollector::new(Some(file_id), &world);
 		let mut next_cache = Cache::new();
 		let l = paragraphs.len();
