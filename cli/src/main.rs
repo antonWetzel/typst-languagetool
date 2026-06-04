@@ -53,7 +53,7 @@ struct CliArgs {
 	#[clap(long, default_value_t = 0.1, id = "SECONDS")]
 	delay: f64,
 
-	/// Length in chars to seperate chunks
+	/// Length in chars to separate chunks
 	#[clap(long, default_value_t = 1000)]
 	chunk_size: usize,
 

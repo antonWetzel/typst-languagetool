@@ -67,14 +67,14 @@ Spellcheck typst files with LanguageTool.
 		- defaults to main parent folder
 		- `--root=<path>`
 - vs-codium/vs-code
-	- install language server protocal (LSP)
+	- install language server protocol (LSP)
 		- `cargo install --git=https://github.com/antonWetzel/typst-languagetool lsp --features=...`
 	- install generic lsp (`editors/vscodium/generic-lsp/generic-lsp-0.0.1.vsix`)
 	- configure options (see below)
 	- hints should appear
 		- first check takes longer
 - neovim
-	- install language server protocal (LSP)
+	- install language server protocol (LSP)
 		- `cargo install --git=https://github.com/antonWetzel/typst-languagetool lsp --features=...`
     - copy the `editors/nvim/typst.lua` file in the `ftplugin/` folder (should be in the nvim config path)
 	- configure options in `init_option` (see below)
@@ -93,7 +93,7 @@ disabled_checks: HashMap<String, Vec<String>>,
 /// Functions calls to ignore (lorem, bibliography, cite, ...)
 ignore_functions: HashSet<String>,
 
-/// use bundled languagetool
+/// specify used backend
 backend: "bundle" | "jar" | "server",
 /// path for jar backend
 jar_location: Option<String>,
