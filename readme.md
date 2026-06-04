@@ -85,7 +85,6 @@ Spellcheck typst files with LanguageTool.
 
 ## Options
 
-
 ```rust
 /// Additional allowed words for language codes
 dictionary: HashMap<String, Vec<String>>,

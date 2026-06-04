@@ -327,12 +327,13 @@ mod tests {
 		let world = lt_world::LtWorld::new("example".into());
 		let harness = TestHarness::new(&world, Path::new("example/ignore.typ"));
 
+		// lambda is replaced by 0 because it is in an equation
 		assert!(
-			harness.is_ignored("𝜆", &["ignorespelling"]),
+			harness.is_ignored("0", &["ignorespelling"]),
 			"lambda should be ignored when ignorespelling is in ignore_functions"
 		);
 		assert!(
-			!harness.is_ignored("𝜆", &[]),
+			!harness.is_ignored("0", &[]),
 			"lambda should not be ignored when ignorespelling is not in ignore_functions"
 		);
 	}
