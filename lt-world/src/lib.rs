@@ -9,7 +9,7 @@ use typst::{
 	Library, LibraryExt, ROUTINES, World,
 	diag::{FileError, FileResult, SourceResult},
 	engine::{Route, Sink, Traced},
-	foundations::{Content, Dict, Value},
+	foundations::Content,
 	syntax::{FileId, Source, VirtualPath},
 	text::Font,
 	utils::LazyHash,
@@ -40,8 +40,6 @@ pub struct LtWorldRunning<'a> {
 
 impl LtWorld {
 	pub fn new(root: PathBuf) -> Self {
-		let mut inputs = Dict::new();
-		inputs.insert("spellcheck".into(), Value::Bool(true));
 		let root = root.canonicalize().unwrap();
 
 		let fonts = Fonts::searcher()
@@ -50,7 +48,7 @@ impl LtWorld {
 			.search();
 
 		Self {
-			library: LazyHash::new(Library::builder().with_inputs(inputs).build()),
+			library: LazyHash::new(Library::builder().build()),
 			now: chrono::Utc::now(),
 
 			packages: PackageStorage::new(None, None, Downloader::new("typst-languagetool")),

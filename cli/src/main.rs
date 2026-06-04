@@ -227,7 +227,6 @@ async fn handle_file(
 	include_all: bool,
 ) -> anyhow::Result<()> {
 	let world = world.with_main(args.lt.main.clone().unwrap_or(path.to_owned()));
-
 	let doc = match world.compile() {
 		Ok(doc) => doc,
 		Err(err) => {
@@ -250,10 +249,7 @@ async fn handle_file(
 	let mut collector = typst_languagetool::FileCollector::new(file_id_opt, &world);
 	let mut next_cache = Cache::new();
 	for (text, mapping) in paragraphs {
-		let lang = match args.lt.languages.get(mapping.short_language()) {
-			Some(lang) => lang.clone(),
-			None => mapping.long_language(),
-		};
+		let lang = mapping.language();
 		let suggestions = if let Some(suggestions) = cache.get(&text, &lang) {
 			suggestions
 		} else {

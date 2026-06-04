@@ -1,4 +1,4 @@
-#set text(lang: "en", region: "EN")
+#set text(lang: "en", region: "GB")
 
 
 = Überschrift

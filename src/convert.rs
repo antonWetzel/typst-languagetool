@@ -1,12 +1,15 @@
-use std::{collections::HashSet, ops::Range};
+use std::{
+	collections::HashSet,
+	ops::{Not, Range},
+};
 
 use typst::{
 	World,
 	foundations::{Content, SequenceElem, StyleChain, StyledElem, Value},
 	math::EquationElem,
-	model::{FigureElem, HeadingElem, ParbreakElem},
+	model::{CiteElem, FigureElem, HeadingElem, ParbreakElem, RefElem},
 	syntax::{FileId, Source, Span, SyntaxKind},
-	text::{Lang, SpaceElem, TextElem},
+	text::{Lang, Region, SpaceElem, TextElem},
 };
 
 use crate::Suggestion;
@@ -40,6 +43,7 @@ fn should_ignore(node: &typst::syntax::LinkedNode, ignore_functions: &HashSet<St
 pub struct Mapping {
 	chars: Vec<(Span, Range<u16>)>,
 	language: Lang,
+	region: Option<Region>,
 }
 
 impl Mapping {
@@ -104,34 +108,14 @@ impl Mapping {
 		locations
 	}
 
-	pub fn short_language(&self) -> &str {
-		self.language.as_str()
-	}
-
-	// https://languagetool.org/http-api/swagger-ui/#!/default/get_languages
-	// defaults to european region codes (maybe).
-	// todo: default to highest population.
-	pub fn long_language(&self) -> String {
-		match self.language {
-			Lang::FRENCH => "fr-FR".into(),
-			Lang::SWEDISH => "sv-SE".into(),
-			Lang::ITALIAN => "it-IT".into(),
-			Lang::SPANISH => "es-ES".into(),
-			Lang::DUTCH => "nl-NL".into(),
-			Lang::CHINESE => "zh-CN".into(),
-			Lang::UKRAINIAN => "uk-UA".into(),
-			Lang::SLOVENIAN => "sl-SI".into(),
-			Lang::RUSSIAN => "ru-RU".into(),
-			Lang::ROMANIAN => "ro-RO".into(),
-			Lang::POLISH => "pl-PL".into(),
-			Lang::JAPANESE => "ja-JP".into(),
-			Lang::GREEK => "el-GR".into(),
-			Lang::DANISH => "da-DK".into(),
-			Lang::CATALAN => "ca-ES".into(),
-			Lang::PORTUGUESE => "pt-PT".into(),
-			Lang::ENGLISH => "en-GB".into(),
-			Lang::GERMAN => "de-DE".into(),
-			lang => lang.as_str().into(),
+	pub fn language(&self) -> String {
+		match self.region {
+			Some(region) => format!(
+				"{}-{}",
+				self.language.as_str(),
+				region.as_str().to_uppercase()
+			),
+			None => self.language.as_str().into(),
 		}
 	}
 }
@@ -146,6 +130,7 @@ pub fn document(
 		mapping: Mapping {
 			chars: Vec::new(),
 			language: Lang::ENGLISH,
+			region: None,
 		},
 		chunk_size,
 		contains_file: false,
@@ -167,7 +152,7 @@ struct Converter {
 	prev: Vec<(String, Mapping)>,
 }
 
-const SPACE: &str = "\n\n";
+const SPACE: &str = " ";
 const BREAK: &str = "\n\n";
 
 impl Converter {
@@ -179,10 +164,12 @@ impl Converter {
 		let mapping = Mapping {
 			chars: Vec::new(),
 			language: self.mapping.language,
+			region: self.mapping.region,
 		};
 		let mapping = std::mem::replace(&mut self.mapping, mapping);
+		let contains_file = std::mem::take(&mut self.contains_file);
 
-		if self.file_id.is_some() && self.contains_file {
+		if self.file_id.is_some() && contains_file.not() {
 			return;
 		}
 		self.prev.push((text, mapping));
@@ -196,6 +183,12 @@ impl Converter {
 	}
 
 	pub fn add_text(&mut self, text: &str, span: Span) {
+		if let Some(file) = self.file_id
+			&& let Some(current) = span.id()
+			&& file == current
+		{
+			self.contains_file = true;
+		}
 		self.text += text;
 		let mut buf = [0; 2];
 		for (idx, c) in text.char_indices() {
@@ -205,9 +198,6 @@ impl Converter {
 				self.mapping.chars.push((span, range.clone()));
 			}
 		}
-		if self.text.len() > self.chunk_size {
-			self.break_chunk();
-		}
 	}
 
 	pub fn iter_content(&mut self, content: &Content, style: StyleChain) {
@@ -216,15 +206,19 @@ impl Converter {
 			self.iter_content(&styled.child, style);
 		} else if let Some(text) = content.to_packed::<TextElem>() {
 			let lang = style.get(TextElem::lang);
-			let _region = style.get(TextElem::region); // todo: add for checking instead of calculation region
-			self.add_text(&text.text, text.span());
-			if self.mapping.language != lang {
+			let region = style.get(TextElem::region);
+			if self.mapping.language != lang || self.mapping.region != region {
 				self.break_chunk();
 			}
 			self.mapping.language = lang;
+			self.mapping.region = region;
+			self.add_text(&text.text, text.span());
 		} else if let Some(heading) = content.to_packed::<HeadingElem>() {
-			// todo: chunking based on this level
-			let _level = heading.resolve_level(style);
+			let level = heading.resolve_level(style);
+			// todo: add setting for this
+			if level.get() <= 2 {
+				self.break_chunk();
+			}
 			self.iter_content(&heading.body, style);
 		} else if let Some(sequence) = content.to_packed::<SequenceElem>() {
 			for child in sequence.children.iter() {
@@ -233,14 +227,22 @@ impl Converter {
 		} else if let Some(space) = content.to_packed::<SpaceElem>() {
 			self.maybe_add_text(SPACE, space.span());
 		} else if let Some(parbreak) = content.to_packed::<ParbreakElem>() {
-			self.maybe_add_text(BREAK, parbreak.span());
+			if self.text.len() > self.chunk_size {
+				self.break_chunk();
+			} else {
+				self.maybe_add_text(BREAK, parbreak.span());
+			}
 		} else if let Some(figure) = content.to_packed::<FigureElem>() {
 			if let Some(caption) = figure.caption.get_ref(style) {
 				self.iter_content(&caption.body, style);
 			}
 			self.iter_content(&figure.body, style);
-		} else if let Some(_equation) = content.to_packed::<EquationElem>() {
-			// ?
+		} else if let Some(equation) = content.to_packed::<EquationElem>() {
+			self.add_text("0", equation.span());
+		} else if let Some(cite) = content.to_packed::<RefElem>() {
+			self.add_text("X", cite.span());
+		} else if let Some(cite) = content.to_packed::<CiteElem>() {
+			self.add_text("X", cite.span());
 		} else {
 			for (_key, field) in content.fields() {
 				self.iter_value(&field, style);

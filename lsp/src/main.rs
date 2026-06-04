@@ -90,7 +90,6 @@ async fn main() -> anyhow::Result<()> {
 struct Options {
 	chunk_size: usize,
 	on_change: Option<std::time::Duration>,
-	language_codes: HashMap<String, String>,
 	main: Option<PathBuf>,
 	ignore_functions: HashSet<String>,
 }
@@ -150,7 +149,6 @@ impl State {
 			options: Options {
 				on_change: options.on_change,
 				chunk_size: options.lt.chunk_size,
-				language_codes: options.lt.languages,
 				main: options.lt.main,
 				ignore_functions: options.lt.ignore_functions,
 			},
@@ -417,7 +415,6 @@ impl State {
 		self.options = Options {
 			on_change: options.on_change,
 			chunk_size: options.lt.chunk_size,
-			language_codes: options.lt.languages,
 			main: options.lt.main,
 			ignore_functions: options.lt.ignore_functions,
 		};
@@ -452,12 +449,7 @@ impl State {
 		let l = paragraphs.len();
 		eprintln!("Checking {} paragraphs", l);
 		for (idx, (text, mapping)) in paragraphs.into_iter().enumerate() {
-			let lang = self
-				.options
-				.language_codes
-				.get(mapping.short_language())
-				.map(|x| x.clone())
-				.unwrap_or(mapping.long_language());
+			let lang = mapping.language();
 			let suggestions = if let Some(suggestions) = self.cache.get(&text, &lang) {
 				suggestions
 			} else {
