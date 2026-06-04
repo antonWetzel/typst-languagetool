@@ -6,10 +6,10 @@ use std::{
 
 use chrono::{DateTime, Datelike, FixedOffset, Local, Utc};
 use typst::{
-	Library, LibraryExt, World,
+	Library, LibraryExt, ROUTINES, World,
 	diag::{FileError, FileResult, SourceResult},
-	foundations::{Dict, Value},
-	layout::PagedDocument,
+	engine::{Route, Sink, Traced},
+	foundations::Content,
 	syntax::{FileId, Source, VirtualPath},
 	text::Font,
 	utils::LazyHash,
@@ -40,8 +40,6 @@ pub struct LtWorldRunning<'a> {
 
 impl LtWorld {
 	pub fn new(root: PathBuf) -> Self {
-		let mut inputs = Dict::new();
-		inputs.insert("spellcheck".into(), Value::Bool(true));
 		let root = root.canonicalize().unwrap();
 
 		let fonts = Fonts::searcher()
@@ -50,7 +48,7 @@ impl LtWorld {
 			.search();
 
 		Self {
-			library: LazyHash::new(Library::builder().with_inputs(inputs).build()),
+			library: LazyHash::new(Library::builder().build()),
 			now: chrono::Utc::now(),
 
 			packages: PackageStorage::new(None, None, Downloader::new("typst-languagetool")),
@@ -128,8 +126,26 @@ impl Deref for LtWorldRunning<'_> {
 }
 
 impl LtWorldRunning<'_> {
-	pub fn compile(&self) -> SourceResult<PagedDocument> {
-		typst::compile(self).output
+	pub fn compile(&self) -> SourceResult<Content> {
+		use typst::comemo::Track;
+
+		let mut sink = Sink::new();
+		let world = (self as &dyn World).track();
+
+		let main = world.main();
+		let main = world.source(main).expect("source exist");
+
+		let content = typst_eval::eval(
+			&ROUTINES,
+			world,
+			Traced::default().track(),
+			sink.track_mut(),
+			Route::default().track(),
+			&main,
+		)?
+		.content();
+
+		Ok(content)
 	}
 }
 

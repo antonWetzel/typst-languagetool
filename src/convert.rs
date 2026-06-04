@@ -1,10 +1,15 @@
-use std::{collections::HashSet, ops::Range};
+use std::{
+	collections::HashSet,
+	ops::{Not, Range},
+};
 
 use typst::{
 	World,
-	layout::{Abs, Em, PagedDocument, Point},
+	foundations::{Content, SequenceElem, StyleChain, StyledElem, Value},
+	math::EquationElem,
+	model::{CiteElem, FigureElem, HeadingElem, ParbreakElem, RefElem},
 	syntax::{FileId, Source, Span, SyntaxKind},
-	text::{Lang, TextItem},
+	text::{Lang, Region, SpaceElem, TextElem},
 };
 
 use crate::Suggestion;
@@ -38,6 +43,7 @@ fn should_ignore(node: &typst::syntax::LinkedNode, ignore_functions: &HashSet<St
 pub struct Mapping {
 	chars: Vec<(Span, Range<u16>)>,
 	language: Lang,
+	region: Option<Region>,
 }
 
 impl Mapping {
@@ -48,7 +54,9 @@ impl Mapping {
 		source: Option<&Source>,
 		ignore_functions: &HashSet<String>,
 	) -> Vec<(FileId, Range<usize>)> {
-		let chars = &self.chars[suggestion.start..suggestion.end];
+		let Some(chars) = &self.chars.get(suggestion.start..suggestion.end) else {
+			return Vec::new();
+		};
 		let mut locations = Vec::<(FileId, Range<usize>)>::new();
 		for (span, range) in chars.iter().cloned() {
 			let Some(id) = span.id() else {
@@ -100,195 +108,162 @@ impl Mapping {
 		locations
 	}
 
-	pub fn short_language(&self) -> &str {
-		self.language.as_str()
-	}
-
-	// https://languagetool.org/http-api/swagger-ui/#!/default/get_languages
-	// defaults to european region codes (maybe).
-	// todo: default to highest population.
-	pub fn long_language(&self) -> String {
-		match self.language {
-			Lang::FRENCH => "fr-FR".into(),
-			Lang::SWEDISH => "sv-SE".into(),
-			Lang::ITALIAN => "it-IT".into(),
-			Lang::SPANISH => "es-ES".into(),
-			Lang::DUTCH => "nl-NL".into(),
-			Lang::CHINESE => "zh-CN".into(),
-			Lang::UKRAINIAN => "uk-UA".into(),
-			Lang::SLOVENIAN => "sl-SI".into(),
-			Lang::RUSSIAN => "ru-RU".into(),
-			Lang::ROMANIAN => "ro-RO".into(),
-			Lang::POLISH => "pl-PL".into(),
-			Lang::JAPANESE => "ja-JP".into(),
-			Lang::GREEK => "el-GR".into(),
-			Lang::DANISH => "da-DK".into(),
-			Lang::CATALAN => "ca-ES".into(),
-			Lang::PORTUGUESE => "pt-PT".into(),
-			Lang::ENGLISH => "en-GB".into(),
-			Lang::GERMAN => "de-DE".into(),
-			lang => lang.as_str().into(),
+	pub fn language(&self) -> String {
+		match self.region {
+			Some(region) => format!(
+				"{}-{}",
+				self.language.as_str(),
+				region.as_str().to_uppercase()
+			),
+			None => self.language.as_str().into(),
 		}
 	}
 }
 
-const LINE_SPACING: Em = Em::new(0.65);
-
-pub fn document(
-	doc: &PagedDocument,
+pub fn content(
+	content: &Content,
 	chunk_size: usize,
 	file_id: Option<FileId>,
 ) -> Vec<(String, Mapping)> {
-	let mut res = Vec::new();
-
-	for page in &doc.pages {
-		let mut converter = Converter::new(chunk_size, Lang::ENGLISH);
-		converter.frame(&page.frame, Point::zero(), &mut res, file_id);
-		if converter.contains_file {
-			res.push((converter.text, converter.mapping));
-		}
-	}
-	res
+	let mut converter = Converter {
+		text: String::new(),
+		mapping: Mapping {
+			chars: Vec::new(),
+			language: Lang::ENGLISH,
+			region: None,
+		},
+		chunk_size,
+		contains_file: false,
+		file_id,
+		prev: Vec::new(),
+	};
+	converter.iter_content(content, StyleChain::default());
+	converter.break_chunk();
+	converter.prev
 }
 
 struct Converter {
 	text: String,
 	mapping: Mapping,
-	x: Abs,
-	y: Abs,
-	span: (Span, u16),
 	chunk_size: usize,
 	contains_file: bool,
+	file_id: Option<FileId>,
+
+	prev: Vec<(String, Mapping)>,
 }
 
+// Text replacements
+const SPACE: &str = " ";
+const BREAK: &str = "\n\n";
+const EQUATION: &str = "0";
+const REFERENCE: &str = "X";
+
 impl Converter {
-	fn new(chunk_size: usize, language: Lang) -> Self {
-		Self {
-			text: String::new(),
-			mapping: Mapping { chars: Vec::new(), language },
-			x: Abs::zero(),
-			y: Abs::zero(),
-			span: (Span::detached(), 0),
-			contains_file: false,
-			chunk_size,
-		}
-	}
-
-	fn insert_whitespace(&mut self, whitespace: &str) {
-		if self.text.ends_with(whitespace) {
+	pub fn break_chunk(&mut self) {
+		if self.text.is_empty() {
 			return;
 		}
-		self.text += whitespace;
-		for _ in whitespace.encode_utf16() {
-			self.mapping.chars.push((Span::detached(), 0..0));
-		}
-	}
+		let text = std::mem::take(&mut self.text);
+		let mapping = Mapping {
+			chars: Vec::new(),
+			language: self.mapping.language,
+			region: self.mapping.region,
+		};
+		let mapping = std::mem::replace(&mut self.mapping, mapping);
+		let contains_file = std::mem::take(&mut self.contains_file);
 
-	fn seperate(&mut self, res: &mut Vec<(String, Mapping)>) {
-		let language = self.mapping.language;
-		if self.contains_file {
-			let text = std::mem::take(&mut self.text);
-			let mapping = std::mem::replace(
-				&mut self.mapping,
-				Mapping {
-					chars: Vec::new(),
-					language: Lang::ENGLISH,
-				},
-			);
-			res.push((text, mapping));
-		}
-		*self = Converter::new(self.chunk_size, language);
-	}
-
-	fn insert_parbreak(&mut self, res: &mut Vec<(String, Mapping)>) {
-		if self.mapping.chars.len() > self.chunk_size {
-			self.seperate(res);
+		if self.file_id.is_some() && contains_file.not() {
 			return;
 		}
-		self.insert_whitespace("\n\n");
+		self.prev.push((text, mapping));
 	}
 
-	fn whitespace(&mut self, text: &TextItem, pos: Point, res: &mut Vec<(String, Mapping)>) {
-		// Use a large allowed delta for comparisions
-		let delta = Abs::pt(1.0);
-
-		if (self.x - pos.x).abs() < delta {
+	pub fn maybe_add_text(&mut self, text: &str, span: Span) {
+		if self.text.ends_with(text) {
 			return;
 		}
-		let line_spacing = (text.font.metrics().cap_height + LINE_SPACING).at(text.size);
-		let next_line = (self.y + line_spacing - pos.y).abs() < Abs::pt(1.0);
-		if !next_line {
-			self.insert_parbreak(res);
-			return;
-		}
-		let span = text.glyphs[0].span;
-		if span == self.span {
-			return;
-		}
-		self.insert_whitespace(" ");
+		self.add_text(text, span);
 	}
 
-	fn frame(
-		&mut self,
-		frame: &typst::layout::Frame,
-		pos: Point,
-		res: &mut Vec<(String, Mapping)>,
-		file_id: Option<FileId>,
-	) {
-		for &(p, ref item) in frame.items() {
-			self.item(p + pos, item, res, file_id);
+	pub fn add_text(&mut self, text: &str, span: Span) {
+		if let Some(file) = self.file_id
+			&& let Some(current) = span.id()
+			&& file == current
+		{
+			self.contains_file = true;
+		}
+		self.text += text;
+		let mut buf = [0; 2];
+		for (idx, c) in text.char_indices() {
+			let n = c.encode_utf16(&mut buf).len();
+			let range = (idx as u16)..((idx + c.len_utf8()) as u16);
+			for _ in &buf[..n] {
+				self.mapping.chars.push((span, range.clone()));
+			}
 		}
 	}
 
-	fn item(
-		&mut self,
-		pos: Point,
-		item: &typst::layout::FrameItem,
-		res: &mut Vec<(String, Mapping)>,
-		file_id: Option<FileId>,
-	) {
-		use typst::layout::FrameItem as I;
-		match item {
-			I::Group(g) => self.frame(&g.frame, pos, res, file_id),
-			I::Text(t) => {
-				if self.mapping.language != t.lang {
-					self.seperate(res);
-				}
-				self.mapping.language = t.lang;
+	pub fn iter_content(&mut self, content: &Content, style: StyleChain) {
+		if let Some(styled) = content.to_packed::<StyledElem>() {
+			let style = style.chain(&styled.styles);
+			self.iter_content(&styled.child, style);
+		} else if let Some(text) = content.to_packed::<TextElem>() {
+			let lang = style.get(TextElem::lang);
+			let region = style.get(TextElem::region);
+			if self.mapping.language != lang || self.mapping.region != region {
+				self.break_chunk();
+			}
+			self.mapping.language = lang;
+			self.mapping.region = region;
+			self.add_text(&text.text, text.span());
+		} else if let Some(heading) = content.to_packed::<HeadingElem>() {
+			let level = heading.resolve_level(style);
+			if level.get() <= 2 {
+				self.break_chunk();
+			}
+			self.iter_content(&heading.body, style);
+		} else if let Some(sequence) = content.to_packed::<SequenceElem>() {
+			for child in sequence.children.iter() {
+				self.iter_content(child, style);
+			}
+		} else if let Some(space) = content.to_packed::<SpaceElem>() {
+			self.maybe_add_text(SPACE, space.span());
+		} else if let Some(parbreak) = content.to_packed::<ParbreakElem>() {
+			if self.text.len() > self.chunk_size {
+				self.break_chunk();
+			} else {
+				self.maybe_add_text(BREAK, parbreak.span());
+			}
+		} else if let Some(figure) = content.to_packed::<FigureElem>() {
+			if let Some(caption) = figure.caption.get_ref(style) {
+				self.iter_content(&caption.body, style);
+			}
+			self.iter_content(&figure.body, style);
+		} else if let Some(equation) = content.to_packed::<EquationElem>() {
+			self.add_text(EQUATION, equation.span());
+		} else if let Some(cite) = content.to_packed::<RefElem>() {
+			self.add_text(REFERENCE, cite.span());
+		} else if let Some(cite) = content.to_packed::<CiteElem>() {
+			self.add_text(REFERENCE, cite.span());
+		} else {
+			for (_key, field) in content.fields() {
+				self.iter_value(&field, style);
+			}
+			self.maybe_add_text(SPACE, content.span());
+		}
+	}
 
-				self.whitespace(t, pos, res);
-				self.x = pos.x + t.width();
-				self.y = pos.y;
-				self.text += t.text.as_str();
-
-				let mut iter = t.text.encode_utf16();
-				let mut prev_range = 0..0;
-				for g in t.glyphs.iter().cloned() {
-					let range = g.range();
-					// some chars (large brackets, ...) create mutliple glyphs, skip
-					if range == prev_range {
-						continue;
-					}
-					prev_range = range;
-					let Some(text) = t.text.get(g.range()) else {
-						continue;
-					};
-
-					for t in text.encode_utf16() {
-						assert_eq!(t, iter.next().unwrap());
-
-						let m = (g.span.0, g.span.1..(g.span.1 + g.range.len() as u16));
-						if let Some(id) = m.0.id() {
-							self.span = (m.0, m.1.end);
-							self.contains_file |=
-								file_id.map(|file_id| file_id == id).unwrap_or(true);
-						}
-						self.mapping.chars.push(m);
-					}
-				}
-				assert_eq!(None, iter.next());
+	pub fn iter_value(&mut self, value: &Value, style: StyleChain) {
+		match value {
+			Value::Content(content) => {
+				self.iter_content(content, style);
 			},
-			I::Link(..) | I::Tag(..) | I::Shape(..) | I::Image(..) => {},
+			Value::Array(array) => {
+				for value in array.iter() {
+					self.iter_value(value, style);
+				}
+			},
+			_ => {},
 		}
 	}
 }
@@ -309,7 +284,7 @@ mod tests {
 		fn new(world: &'a lt_world::LtWorld, main_file: &Path) -> Self {
 			let world = world.with_main(main_file.to_path_buf());
 			let doc = world.compile().unwrap();
-			let paragraphs = document(&doc, 1000, None);
+			let paragraphs = content(&doc, 1000, None);
 			assert_eq!(paragraphs.len(), 1, "expected exactly one paragraph");
 			let (text, mapping) = paragraphs.into_iter().next().unwrap();
 			Self { world, text, mapping }
@@ -353,12 +328,13 @@ mod tests {
 		let world = lt_world::LtWorld::new("example".into());
 		let harness = TestHarness::new(&world, Path::new("example/ignore.typ"));
 
+		// lambda is replaced by 0 because it is in an equation
 		assert!(
-			harness.is_ignored("𝜆", &["ignorespelling"]),
+			harness.is_ignored("0", &["ignorespelling"]),
 			"lambda should be ignored when ignorespelling is in ignore_functions"
 		);
 		assert!(
-			!harness.is_ignored("𝜆", &[]),
+			!harness.is_ignored("0", &[]),
 			"lambda should not be ignored when ignorespelling is not in ignore_functions"
 		);
 	}

@@ -53,7 +53,7 @@ struct CliArgs {
 	#[clap(long, default_value_t = 0.1, id = "SECONDS")]
 	delay: f64,
 
-	/// Length in chars to seperate chunks
+	/// Length in chars to separate chunks
 	#[clap(long, default_value_t = 1000)]
 	chunk_size: usize,
 
@@ -245,14 +245,11 @@ async fn handle_file(
 	let file_id = world.file_id(path).unwrap();
 	let file_id_opt = include_all.not().then_some(file_id);
 
-	let paragraphs = typst_languagetool::convert::document(&doc, chunk_size, file_id_opt);
+	let paragraphs = typst_languagetool::convert::content(&doc, chunk_size, file_id_opt);
 	let mut collector = typst_languagetool::FileCollector::new(file_id_opt, &world);
 	let mut next_cache = Cache::new();
 	for (text, mapping) in paragraphs {
-		let lang = match args.lt.languages.get(mapping.short_language()) {
-			Some(lang) => lang.clone(),
-			None => mapping.long_language(),
-		};
+		let lang = mapping.language();
 		let suggestions = if let Some(suggestions) = cache.get(&text, &lang) {
 			suggestions
 		} else {

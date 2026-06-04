@@ -192,8 +192,6 @@ pub struct LanguageToolOptions {
 	#[serde(flatten)]
 	pub backend: Option<BackendOptions>,
 
-	/// map for short to long language codes (`en -> en-US`)
-	pub languages: HashMap<String, String>,
 	/// Additional allowed words
 	pub dictionary: HashMap<String, Vec<String>>,
 	/// Languagetool rules to ignore (WHITESPACE_RULE, ...)
@@ -230,7 +228,6 @@ impl Default for LanguageToolOptions {
 
 			backend: None,
 
-			languages: HashMap::new(),
 			dictionary: HashMap::new(),
 			disabled_checks: HashMap::new(),
 			ignore_functions: ["lorem", "bibliography", "cite"]
@@ -245,7 +242,6 @@ impl LanguageToolOptions {
 	pub fn overwrite(mut self, other: Self) -> Self {
 		self.dictionary.extend(other.dictionary);
 		self.disabled_checks.extend(other.disabled_checks);
-		self.languages.extend(other.languages);
 		self.ignore_functions.extend(other.ignore_functions);
 
 		Self {
@@ -259,7 +255,6 @@ impl LanguageToolOptions {
 
 			backend: other.backend.or(self.backend),
 
-			languages: self.languages,
 			dictionary: self.dictionary,
 			disabled_checks: self.disabled_checks,
 			ignore_functions: self.ignore_functions,
