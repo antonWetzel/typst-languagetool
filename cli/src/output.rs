@@ -1,4 +1,4 @@
-use std::{io::Write, io::stdout, ops::Not, path::Path};
+use std::{io::Write, io::stdout, ops::Not};
 
 use annotate_snippets::{AnnotationKind, Level, Renderer, Snippet};
 use typst::syntax::Source;
@@ -6,7 +6,7 @@ use typst_languagetool::Diagnostic;
 
 const MAX_SUGGESTIONS: usize = 20;
 
-pub fn plain(file: &Path, source: &Source, diagnostic: Diagnostic) {
+pub fn plain(file: &str, source: &Source, diagnostic: Diagnostic) {
 	let mut out = stdout().lock();
 
 	let (start_line, start_column) = source
@@ -20,7 +20,7 @@ pub fn plain(file: &Path, source: &Source, diagnostic: Diagnostic) {
 	write!(
 		out,
 		"{} {}:{}-{}:{} info {}",
-		file.display(),
+		file,
 		start_line + 1,
 		start_column + 1,
 		end_line + 1,
@@ -45,9 +45,7 @@ pub fn plain(file: &Path, source: &Source, diagnostic: Diagnostic) {
 	}
 }
 
-pub fn pretty(file: &Path, source: &Source, diagnostic: Diagnostic) {
-	let file_name = format!("{}", file.display());
-
+pub fn pretty(file: &str, source: &Source, diagnostic: Diagnostic) {
 	let start_line = source
 		.lines()
 		.byte_to_line(diagnostic.locations[0].1.start)
@@ -70,7 +68,7 @@ pub fn pretty(file: &Path, source: &Source, diagnostic: Diagnostic) {
 
 	let mut snippet = Snippet::source(&text[context.clone()])
 		.line_start(start_line + 1)
-		.path(&file_name)
+		.path(file)
 		.fold(true);
 
 	let start = diagnostic.locations[0].1.start - context.start;

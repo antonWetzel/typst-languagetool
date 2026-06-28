@@ -236,6 +236,8 @@ impl State {
 		for (i, value) in replacements.into_iter().enumerate() {
 			let title = format!("Replace with \"{}\"", value);
 			let replace = TextEdit { range: diagnostic.range, new_text: value };
+
+			#[expect(clippy::mutable_key_type)]
 			let edit = [(params.text_document.uri.clone(), vec![replace])]
 				.into_iter()
 				.collect();

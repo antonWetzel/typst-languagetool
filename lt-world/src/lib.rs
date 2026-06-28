@@ -4,33 +4,29 @@ use std::{
 	path::{Path, PathBuf},
 };
 
-use chrono::{DateTime, Datelike, FixedOffset, Local, Utc};
 use typst::{
-	Library, LibraryExt, ROUTINES, World,
+	Library, LibraryExt, World,
 	diag::{FileError, FileResult, SourceResult},
 	engine::{Route, Sink, Traced},
-	foundations::Content,
-	syntax::{FileId, Source, VirtualPath},
+	foundations::{Content, Duration},
+	syntax::{FileId, RootedPath, Source, VirtualPath, VirtualRoot},
 	text::Font,
 	utils::LazyHash,
 };
 use typst_kit::{
-	download::Downloader,
-	fonts::{FontSlot, Fonts},
-	package::PackageStorage,
+	datetime::Time, downloader::SystemDownloader, files::FsRoot, fonts::FontStore,
+	packages::SystemPackages,
 };
 
-#[derive(Debug)]
 pub struct LtWorld {
 	library: LazyHash<Library>,
-	now: DateTime<Utc>,
+	now: Time,
 
-	packages: PackageStorage,
+	packages: SystemPackages,
+	root: FsRoot,
 
-	fonts: Vec<FontSlot>,
-	font_book: LazyHash<typst::text::FontBook>,
+	fonts: FontStore,
 	shadow_files: HashMap<FileId, Source>,
-	root: PathBuf,
 }
 
 pub struct LtWorldRunning<'a> {
@@ -42,32 +38,30 @@ impl LtWorld {
 	pub fn new(root: PathBuf) -> Self {
 		let root = root.canonicalize().unwrap();
 
-		let fonts = Fonts::searcher()
-			.include_embedded_fonts(true)
-			.include_system_fonts(true)
-			.search();
+		let mut fonts = FontStore::new();
+		fonts.extend(typst_kit::fonts::embedded());
+		fonts.extend(typst_kit::fonts::system());
 
 		Self {
 			library: LazyHash::new(Library::builder().build()),
-			now: chrono::Utc::now(),
+			now: Time::system(),
 
-			packages: PackageStorage::new(None, None, Downloader::new("typst-languagetool")),
+			packages: SystemPackages::new(SystemDownloader::new("typst-languagetool")),
 
-			font_book: LazyHash::new(fonts.book),
-			fonts: fonts.fonts,
-			root,
+			fonts,
+			root: FsRoot::new(root),
 			shadow_files: HashMap::new(),
 		}
 	}
 
 	pub fn root(&self) -> &Path {
-		&self.root
+		self.root.path()
 	}
 
 	pub fn file_id(&self, path: &Path) -> Option<FileId> {
 		let path = path.canonicalize().unwrap();
-		let path = path.strip_prefix(&self.root).ok()?;
-		let id = FileId::new(None, VirtualPath::new(path));
+		let path = VirtualPath::virtualize(self.root.path(), &path).ok()?;
+		let id = RootedPath::new(VirtualRoot::Project, path).intern();
 		Some(id)
 	}
 
@@ -92,28 +86,15 @@ impl LtWorld {
 	}
 
 	pub fn path(&self, file_id: FileId) -> typst::diag::FileResult<PathBuf> {
-		let path = if let Some(spec) = file_id.package() {
-			self.packages
-				.prepare_package(&spec, &mut Progress)?
-				.join(file_id.vpath().as_rootless_path())
-		} else {
-			self.root.join(file_id.vpath().as_rootless_path())
-		};
-
-		Ok(path)
+		match file_id.root() {
+			VirtualRoot::Package(spec) => self.packages.obtain(spec)?.resolve(file_id.vpath()),
+			VirtualRoot::Project => self.root.resolve(file_id.vpath()),
+		}
 	}
 
 	pub fn with_main(&self, main: PathBuf) -> LtWorldRunning<'_> {
-		let main = VirtualPath::new(
-			main.canonicalize()
-				.unwrap()
-				.strip_prefix(&self.root)
-				.unwrap(),
-		);
-		LtWorldRunning {
-			world: &self,
-			main: FileId::new(None, main),
-		}
+		let main = self.file_id(&main).unwrap();
+		LtWorldRunning { world: self, main }
 	}
 }
 
@@ -136,8 +117,8 @@ impl LtWorldRunning<'_> {
 		let main = world.source(main).expect("source exist");
 
 		let content = typst_eval::eval(
-			&ROUTINES,
 			world,
+			&self.library,
 			Traced::default().track(),
 			sink.track_mut(),
 			Route::default().track(),
@@ -154,24 +135,12 @@ impl World for LtWorldRunning<'_> {
 		&self.library
 	}
 
-	fn today(&self, offset: Option<i64>) -> Option<typst::foundations::Datetime> {
-		let with_offset = match offset {
-			None => self.now.with_timezone(&Local).fixed_offset(),
-			Some(hours) => {
-				let seconds = i32::try_from(hours).ok()?.checked_mul(3600)?;
-				self.now.with_timezone(&FixedOffset::east_opt(seconds)?)
-			},
-		};
-
-		typst::foundations::Datetime::from_ymd(
-			with_offset.year(),
-			with_offset.month().try_into().ok()?,
-			with_offset.day().try_into().ok()?,
-		)
+	fn today(&self, offset: Option<Duration>) -> Option<typst::foundations::Datetime> {
+		self.now.today(offset)
 	}
 
 	fn book(&self) -> &LazyHash<typst::text::FontBook> {
-		&self.font_book
+		self.fonts.book()
 	}
 
 	fn main(&self) -> FileId {
@@ -201,16 +170,6 @@ impl World for LtWorldRunning<'_> {
 	}
 
 	fn font(&self, index: usize) -> Option<Font> {
-		self.fonts[index].get()
+		self.fonts.font(index)
 	}
-}
-
-struct Progress;
-
-impl typst_kit::download::Progress for Progress {
-	fn print_start(&mut self) {}
-
-	fn print_progress(&mut self, _state: &typst_kit::download::DownloadState) {}
-
-	fn print_finish(&mut self, _state: &typst_kit::download::DownloadState) {}
 }

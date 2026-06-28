@@ -21,7 +21,7 @@ fn is_call_to_ignored_function(
 	match node.kind() {
 		SyntaxKind::FuncCall => node
 			.leftmost_leaf()
-			.map(|leaf| ignore_functions.contains(leaf.text().as_str()))
+			.map(|leaf| ignore_functions.contains(leaf.leaf_text().as_str()))
 			.unwrap_or(false),
 		SyntaxKind::Ref => ignore_functions.contains("cite"),
 		_ => false,

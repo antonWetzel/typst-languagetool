@@ -121,14 +121,15 @@ async fn main() -> anyhow::Result<()> {
 		},
 
 		_ => {
-			let mut available = Vec::new();
-			#[cfg(feature = "bundle")]
-			available.push("bundle");
-			#[cfg(feature = "jar")]
-			available.push("jar-location");
-			#[cfg(feature = "server")]
-			available.push("host and port");
-			let available = available.join(" or ");
+			let available = [
+				#[cfg(feature = "bundle")]
+				"bundle",
+				#[cfg(feature = "jar")]
+				"jar",
+				#[cfg(feature = "server")]
+				"host and port",
+			]
+			.join(" or");
 
 			Err(anyhow::anyhow!(
 				"Exactly one backend must be specified ({available})"
@@ -170,15 +171,15 @@ async fn main() -> anyhow::Result<()> {
 	Ok(())
 }
 
-async fn check(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::Result<()> {
+async fn check(args: Args, mut lt: LanguageTool, world: LtWorld) -> anyhow::Result<()> {
 	handle_file(
 		args.path
 			.as_ref()
-			.or_else(|| args.lt.main.as_ref())
+			.or(args.lt.main.as_ref())
 			.context("No path or main specified")?,
 		&mut lt,
 		&args,
-		&mut world,
+		&world,
 		args.lt.chunk_size,
 		&mut Cache::new(),
 		args.path.is_none(),
@@ -187,7 +188,7 @@ async fn check(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::
 	Ok(())
 }
 
-async fn watch(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::Result<()> {
+async fn watch(args: Args, mut lt: LanguageTool, world: LtWorld) -> anyhow::Result<()> {
 	let (tx, rx) = std::sync::mpsc::channel();
 	let mut watcher = new_debouncer(Duration::from_secs_f64(args.delay), tx)?;
 	let mut cache = Cache::new();
@@ -206,7 +207,7 @@ async fn watch(args: Args, mut lt: LanguageTool, mut world: LtWorld) -> anyhow::
 				&event.path,
 				&mut lt,
 				&args,
-				&mut world,
+				&world,
 				args.lt.chunk_size,
 				&mut cache,
 				false,
@@ -269,8 +270,8 @@ async fn handle_file(
 			for diagnostic in diagnostics {
 				let id = diagnostic.locations[0].0;
 				let source = world.source(id).unwrap();
-				let path = id.vpath().as_rootless_path();
-				output::plain(&path, &source, diagnostic);
+				let path = id.vpath().get_without_slash();
+				output::plain(path, &source, diagnostic);
 			}
 			plain_end();
 		} else {
@@ -278,22 +279,23 @@ async fn handle_file(
 			for diagnostic in diagnostics {
 				let id = diagnostic.locations[0].0;
 				let source = world.source(id).unwrap();
-				let path = id.vpath().as_rootless_path();
-				output::pretty(&path, &source, diagnostic);
+				let path = id.vpath().get_without_slash();
+				output::pretty(path, &source, diagnostic);
 			}
 		}
 	} else {
+		let path = file_id.vpath().get_without_slash();
 		let source = world.source(file_id).unwrap();
 		if args.plain {
 			plain_start();
 			for diagnostic in diagnostics {
-				output::plain(&path, &source, diagnostic);
+				output::plain(path, &source, diagnostic);
 			}
 			plain_end();
 		} else {
 			pretty_start();
 			for diagnostic in diagnostics {
-				output::pretty(&path, &source, diagnostic);
+				output::pretty(path, &source, diagnostic);
 			}
 		}
 	}
