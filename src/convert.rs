@@ -9,7 +9,7 @@ use typst::{
 	math::EquationElem,
 	model::{CiteElem, FigureElem, HeadingElem, ParbreakElem, RefElem},
 	syntax::{FileId, Source, Span, SyntaxKind},
-	text::{Lang, Region, SpaceElem, TextElem},
+	text::{Lang, Region, SpaceElem, SmartQuoteElem, TextElem},
 };
 
 use crate::Suggestion;
@@ -157,6 +157,8 @@ const SPACE: &str = " ";
 const BREAK: &str = "\n\n";
 const EQUATION: &str = "0";
 const REFERENCE: &str = "X";
+const QUOTE: &str = "'";
+const DOUBLE_QUOTE: &str = "\"";
 
 impl Converter {
 	pub fn break_chunk(&mut self) {
@@ -228,7 +230,13 @@ impl Converter {
 			}
 		} else if let Some(space) = content.to_packed::<SpaceElem>() {
 			self.maybe_add_text(SPACE, space.span());
-		} else if let Some(parbreak) = content.to_packed::<ParbreakElem>() {
+		} else if let Some(smartquote) = content.to_packed::<SmartQuoteElem>() {
+            if smartquote.double.get(style) {
+                self.add_text(DOUBLE_QUOTE, smartquote.span());
+            } else {
+                self.add_text(QUOTE, smartquote.span());
+            }
+        } else if let Some(parbreak) = content.to_packed::<ParbreakElem>() {
 			if self.text.len() > self.chunk_size {
 				self.break_chunk();
 			} else {
